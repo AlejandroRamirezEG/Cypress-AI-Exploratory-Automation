@@ -53,10 +53,10 @@ function pageLabel(url, title, pageHeading) {
   try {
     const parsed = new URL(url);
     const pathSeg = parsed.pathname.split('/').filter(Boolean).pop();
-    if (pathSeg) return prettifySegment(pathSeg);
+    if (pathSeg) return prettifySegment(pathSeg.replace(/\.[^.]+$/, ''));
     // Angular hash routing: /#/seekers-pool
     const hashSeg = parsed.hash.replace(/^#\/?/, '').split('/').filter(Boolean).pop();
-    if (hashSeg) return prettifySegment(hashSeg);
+    if (hashSeg) return prettifySegment(hashSeg.replace(/\.[^.]+$/, ''));
   } catch {}
   if (title && title.trim()) {
     const t = title.trim();

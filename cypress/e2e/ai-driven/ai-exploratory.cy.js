@@ -37,6 +37,8 @@ const IMPACT_LABEL = {
 
 // ── interactive controls (injected into the AUT, not the Cypress runner) ─────
 
+let _barPosition = 'top' // persists across scan cycles
+
 function injectScanControls(win, scanIndex) {
   const doc = win.document
 
@@ -46,7 +48,7 @@ function injectScanControls(win, scanIndex) {
   const existingPill = doc.getElementById('__wcag_pill__')
   if (existingPill) existingPill.remove()
 
-  let position = 'top' // toggled by the ↑/↓ button
+  let position = _barPosition // restored from last cycle; toggled by ↑/↓
 
   const bar = doc.createElement('div')
   bar.id = '__wcag_controls__'
@@ -93,6 +95,7 @@ function injectScanControls(win, scanIndex) {
   syncMoveBtn()
   moveBtn.addEventListener('click', () => {
     position = position === 'bottom' ? 'top' : 'bottom'
+    _barPosition = position
     applyBarStyle()
     syncMoveBtn()
   })
