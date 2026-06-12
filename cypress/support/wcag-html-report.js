@@ -31,6 +31,40 @@ function esc(v) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// Convert a URL path segment or hash segment to a human-readable label.
+// "seekers-pool" → "Seekers Pool", "archiveContacts" → "Archive Contacts"
+function prettifySegment(seg) {
+  return seg
+    .replace(/([a-z])([A-Z])/g, '$1 $2')  // camelCase → words
+    .replace(/[-_]+/g, ' ')               // kebab/snake → spaces
+    .replace(/\b\w/g, c => c.toUpperCase())
+    .trim();
+}
+
+// Derive a short page label from a scan's collected data.
+// Priority: DOM heading (h1/ion-title/h2 captured at scan time)
+//         → URL path segment → hash segment (Angular hash routing)
+//         → page title → null
+function pageLabel(url, title, pageHeading) {
+  if (pageHeading && pageHeading.trim()) {
+    const h = pageHeading.trim();
+    return h.length > 28 ? h.slice(0, 25) + '…' : h;
+  }
+  try {
+    const parsed = new URL(url);
+    const pathSeg = parsed.pathname.split('/').filter(Boolean).pop();
+    if (pathSeg) return prettifySegment(pathSeg);
+    // Angular hash routing: /#/seekers-pool
+    const hashSeg = parsed.hash.replace(/^#\/?/, '').split('/').filter(Boolean).pop();
+    if (hashSeg) return prettifySegment(hashSeg);
+  } catch {}
+  if (title && title.trim()) {
+    const t = title.trim();
+    return t.length > 28 ? t.slice(0, 25) + '…' : t;
+  }
+  return null;
+}
+
 const IMPACT = {
   critical: { bg: '#fef2f2', border: '#fca5a5', chip: '#dc2626' },
   serious:  { bg: '#fff7ed', border: '#fdba74', chip: '#ea580c' },
@@ -305,12 +339,13 @@ function generateCombinedWcagHtml(scans) {
   function tabBtn(scan, i) {
     const s = scan.audit.summary || {};
     const n = s.scanLabel ? parseInt(s.scanLabel.replace(/^scan-/, ''), 10) : i + 1;
+    const label = pageLabel(s.url, s.title, s.pageHeading) || `Scan ${n}`;
     const total = s.axeViolations || 0;
     const crit  = (s.byImpact || {}).critical || 0;
     const badge = total === 0
       ? `<span style="font-size:11px;font-weight:600;background:#dcfce7;color:#166534;padding:2px 7px;border-radius:10px">&#10003; clean</span>`
       : `<span style="font-size:11px;font-weight:600;background:${crit ? '#fef2f2' : '#fff7ed'};color:${crit ? '#dc2626' : '#ea580c'};padding:2px 7px;border-radius:10px">${total}${crit ? ` · ${crit} crit` : ''}</span>`;
-    return `<button class="tab-btn${i === 0 ? ' active' : ''}" onclick="showTab(${i})">Scan ${n} ${badge}</button>`;
+    return `<button class="tab-btn${i === 0 ? ' active' : ''}" onclick="showTab(${i})" title="Scan ${n} — ${esc(s.url || '')}">${esc(label)} ${badge}</button>`;
   }
 
   const first = (scans[0] && scans[0].audit.summary) || {};

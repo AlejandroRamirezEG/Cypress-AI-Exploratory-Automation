@@ -247,9 +247,21 @@ function runAudit(scanLabel) {
       footer: doc.querySelectorAll('footer, [role="contentinfo"]').length,
     }
 
+    // Best-effort page heading: try semantic/ARIA headings first, then Ionic's ion-title.
+    // Each querySelector is safe on non-Ionic pages — returns null if absent.
+    let pageHeading = null
+    for (const sel of ['h1', 'ion-title', '[role="heading"][aria-level="1"]', 'h2']) {
+      const el = doc.querySelector(sel)
+      if (el) {
+        const text = (el.textContent || '').trim().replace(/\s+/g, ' ')
+        if (text) { pageHeading = text; break }
+      }
+    }
+
     const summary = {
       url: doc.location.href,
       title: doc.title,
+      pageHeading,
       mode: INTERACTIVE ? 'interactive' : 'automated',
       scanLabel,
       axeViolations: violations.length,
