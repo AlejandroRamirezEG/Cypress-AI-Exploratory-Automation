@@ -1,105 +1,322 @@
 /// <reference types="cypress" />
-describe('AI Exploratory - element discovery, perf and accessibility', () => {
-  it('discovers interactive elements and performs basic accessibility checks', function () {
-    // Accessibility: run axe quick checks when available (guarded and non-failing)
-    if (typeof cy.injectAxe === 'function') {
-      // attempt injection and log any injection failures
-      cy.injectAxe().then(() => {
-        if (typeof cy.checkA11y === 'function') {
-          cy.checkA11y(null, null, (violations) => {
-            if (violations && violations.length) {
-              cy.task('ai:log', { type: 'accessibility', violationsCount: violations.length, violations });
-            }
-          }, true);
-        }
-      }, (err) => {
-        cy.task('ai:log', { type: 'error', message: 'axeInjectFailed', detail: String(err) });
-      });
+// WCAG 2.1 AA Accessibility Audit — two modes:
+//
+//  AUTOMATED (default)
+//    pnpm test:ai
+//    Visits BASE_URL, scrolls the full page to flush lazy components, audits once.
+//
+//  INTERACTIVE (open-ended investigation via cypress open)
+//    pnpm test:ai_interactive
+//    Visits BASE_URL then shows two in-page buttons:
+//      🔍 Scan     — runs axe on the current page state, saves a report, then loops back
+//      ✓ Done      — ends the session; all completed reports remain on disk
+//    Click Scan as many times as needed — no preset limit.
+//    Exiting Cypress at any point is safe: completed scan reports are already saved.
+//
+//  Env vars:
+//    WCAG_INTERACTIVE=true         enable interactive mode (set by test:ai_interactive)
+//    WCAG_SCAN_TIMEOUT=<ms>        how long to wait for a button click before timing out
+//                                  (default: 600000 = 10 min per cycle)
+//    BASE_URL=<url>                page to audit
+//
+//  Output per scan: reports/ai-insights/wcag-report-scan-<n>.html
+//                   reports/ai-insights/latest-report.json  (all scans appended)
+
+const TARGET_URL = Cypress.env('BASE_URL') || Cypress.config('baseUrl') || 'https://www.saucedemo.com'
+const INTERACTIVE = !!Cypress.env('WCAG_INTERACTIVE')
+const SCAN_WAIT_MS = parseInt(Cypress.env('WCAG_SCAN_TIMEOUT') || String(10 * 60 * 1000), 10)
+// Injected by setupNodeEvents at Cypress launch — groups all output for this session.
+const SESSION_ID = Cypress.env('SESSION_ID') || 'no-session'
+
+const IMPACT_LABEL = {
+  critical: 'WCAG Failure — Critical',
+  serious: 'WCAG Failure — Serious',
+  moderate: 'WCAG Warning — Moderate',
+  minor: 'WCAG Advisory — Minor',
+}
+
+// ── interactive controls (injected into the AUT, not the Cypress runner) ─────
+
+function injectScanControls(win, scanIndex) {
+  const doc = win.document
+
+  // Remove any controls left from a previous cycle (bar or pill).
+  const existing = doc.getElementById('__wcag_controls__')
+  if (existing) existing.remove()
+  const existingPill = doc.getElementById('__wcag_pill__')
+  if (existingPill) existingPill.remove()
+
+  let position = 'top' // toggled by the ↑/↓ button
+
+  const bar = doc.createElement('div')
+  bar.id = '__wcag_controls__'
+
+  function applyBarStyle() {
+    bar.setAttribute('style', [
+      'position:fixed',
+      position === 'bottom' ? 'bottom:0' : 'top:0',
+      'left:0', 'right:0', 'z-index:2147483647',
+      'background:#1e293b', 'color:#fff', 'padding:8px 12px',
+      'font:600 13px/1.4 system-ui,sans-serif',
+      'display:flex', 'align-items:center', 'gap:10px',
+      'box-shadow:0 ' + (position === 'bottom' ? '-2px' : '2px') + ' 10px rgba(0,0,0,.4)',
+    ].join(';'))
+  }
+  applyBarStyle()
+
+  const msg = doc.createElement('span')
+  msg.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'
+  msg.textContent = scanIndex === 1
+    ? '⏸ Set the page to the state you want to audit, then click Scan'
+    : `⏸ Scan ${scanIndex - 1} complete — adjust page state for next scan, or click Done to finish`
+
+  const SOLID = 'border:none;border-radius:4px;padding:5px 12px;font:700 12px system-ui,sans-serif;cursor:pointer;white-space:nowrap;flex-shrink:0'
+  const GHOST = 'border:1px solid rgba(255,255,255,.3);border-radius:4px;padding:5px 10px;font:700 12px system-ui,sans-serif;cursor:pointer;white-space:nowrap;flex-shrink:0;background:rgba(255,255,255,.1);color:#fff'
+
+  const scanBtn = doc.createElement('button')
+  scanBtn.textContent = '🔍 Scan'
+  scanBtn.setAttribute('style', `${SOLID};background:#2563eb;color:#fff`)
+  scanBtn.addEventListener('click', () => { bar.remove(); win.__wcag_action__ = 'scan' })
+
+  const doneBtn = doc.createElement('button')
+  doneBtn.textContent = '✓ Done'
+  doneBtn.setAttribute('style', GHOST)
+  doneBtn.addEventListener('click', () => { bar.remove(); win.__wcag_action__ = 'done' })
+
+  // ↑ / ↓ — move bar to opposite edge
+  const moveBtn = doc.createElement('button')
+  moveBtn.setAttribute('style', GHOST)
+  function syncMoveBtn() {
+    moveBtn.textContent = position === 'bottom' ? '↑' : '↓'
+    moveBtn.title = position === 'bottom' ? 'Move to top' : 'Move to bottom'
+  }
+  syncMoveBtn()
+  moveBtn.addEventListener('click', () => {
+    position = position === 'bottom' ? 'top' : 'bottom'
+    applyBarStyle()
+    syncMoveBtn()
+  })
+
+  // ✕ — hide bar, show a small restore pill in the corner
+  const hideBtn = doc.createElement('button')
+  hideBtn.textContent = '✕'
+  hideBtn.title = 'Hide (click the restore button to bring bar back)'
+  hideBtn.setAttribute('style', GHOST)
+  hideBtn.addEventListener('click', () => {
+    bar.remove()
+    const pill = doc.createElement('button')
+    pill.id = '__wcag_pill__'
+    pill.textContent = '🔍 WCAG'
+    pill.setAttribute('style', [
+      'position:fixed', 'bottom:16px', 'right:16px', 'z-index:2147483647',
+      'background:#1e293b', 'color:#fff', 'border:none', 'border-radius:20px',
+      'padding:7px 16px', 'font:700 12px system-ui,sans-serif',
+      'cursor:pointer', 'box-shadow:0 2px 8px rgba(0,0,0,.4)', 'opacity:.9',
+    ].join(';'))
+    pill.addEventListener('click', () => {
+      pill.remove()
+      doc.body.appendChild(bar)
+    })
+    doc.body.appendChild(pill)
+  })
+
+  bar.appendChild(msg)
+  bar.appendChild(scanBtn)
+  bar.appendChild(doneBtn)
+  bar.appendChild(moveBtn)
+  bar.appendChild(hideBtn)
+  doc.body.appendChild(bar)
+}
+
+// ── open-ended scan loop ──────────────────────────────────────────────────────
+//
+// Recursive pattern: each call queues its Cypress commands, and when the user
+// clicks Scan the .then() callback queues the next cycle — so the recursion
+// unrolls one step at a time during test execution, not all at once.
+// The loop terminates when the user clicks Done (no recursive call is made).
+
+function doScanCycle(scanIndex) {
+  cy.window().then(win => {
+    win.__wcag_action__ = null
+    injectScanControls(win, scanIndex)
+  })
+
+  cy.log(`[wcag-audit] cycle ${scanIndex} — click 🔍 Scan to audit, ✓ Done to finish`)
+
+  // Poll until either button is clicked. Timeout is per-cycle (default 10 min).
+  cy.window({ timeout: SCAN_WAIT_MS })
+    .should(win => { expect(win.__wcag_action__).to.be.oneOf(['scan', 'done']) })
+    .then(win => {
+      const action = win.__wcag_action__
+      win.__wcag_action__ = null
+
+      if (action === 'scan') {
+        runAudit(`scan-${scanIndex}`)
+        doScanCycle(scanIndex + 1)
+      }
+      // 'done' → no recursive call; test completes cleanly
+    })
+}
+
+// ── shared audit logic ────────────────────────────────────────────────────────
+
+function runAudit(scanLabel) {
+  // Re-inject axe each scan — the page may have navigated or Angular may have
+  // re-bootstrapped since the previous scan.
+  cy.injectAxe()
+
+  // violations[] is captured in this call's closure. cy.document() below runs
+  // after cy.checkA11y() completes, so the array is fully populated by then.
+  const violations = []
+  cy.checkA11y(
+    null,
+    { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'best-practice'] } },
+    (axeViolations) => {
+      axeViolations.forEach(v => {
+        violations.push({
+          id: v.id,
+          impact: v.impact,
+          label: IMPACT_LABEL[v.impact] || v.impact,
+          wcag: v.tags.filter(t => t.startsWith('wcag')),
+          description: v.description,
+          help: v.help,
+          helpUrl: v.helpUrl,
+          nodeCount: v.nodes.length,
+          nodes: v.nodes.slice(0, 5).map(n => ({
+            html: n.html,
+            target: n.target,
+            failureSummary: n.failureSummary,
+          })),
+        })
+      })
+    },
+    true // do not fail the test — collect and log only
+  )
+
+  cy.document().then(doc => {
+    const counts = {
+      inputs: doc.querySelectorAll('input').length,
+      textareas: doc.querySelectorAll('textarea').length,
+      selects: doc.querySelectorAll('select').length,
+      ionInputs: doc.querySelectorAll('ion-input').length,
+      ionSelects: doc.querySelectorAll('ion-select').length,
+      ionChecks: doc.querySelectorAll('ion-checkbox').length,
+      ionRadios: doc.querySelectorAll('ion-radio').length,
+      buttons: doc.querySelectorAll('button, ion-button').length,
+      links: doc.querySelectorAll('a[href]').length,
+      images: doc.querySelectorAll('img').length,
+      forms: doc.querySelectorAll('form').length,
     }
 
+    const missingAlt = Array.from(doc.querySelectorAll('img'))
+      .filter(img => !(img.getAttribute('alt') || '').trim())
+      .map(img => ({ src: img.src || null, classes: img.className || null }))
 
-
-
-    const url = Cypress.env('PARABANK_URL') || Cypress.config('baseUrl') || 'about:blank';
-    // Fetch page HTML and inject into a blank document to avoid waiting for remote load event
-    cy.request({ url, failOnStatusCode: false, timeout: 15000 }).then((resp) => {
-      if (resp && resp.body) {
-        // load HTML into the current test document without fetching external resources
-        cy.document().then(doc => {
-          try {
-            doc.open();
-            doc.write(resp.body);
-            doc.close();
-          } catch (e) {
-            // fallback to normal visit if write fails
-          }
-        });
-        cy.aiLog('aiExploratoryFetched', { url, status: resp.status });
-      } else {
-        // fallback to visiting the page (may wait for load)
-        cy.visit(url, { failOnStatusCode: false });
-        cy.aiLog('aiExploratoryVisit', { url });
-      }
-    }, (err) => {
-      // If request failed, attempt a normal visit and log the error
-      cy.task('ai:log', { type: 'error', message: 'requestFailed', detail: String(err) });
-      cy.visit(url, { failOnStatusCode: false });
-      cy.aiLog('aiExploratoryVisit', { url });
-    }).then(() => {
-
-      // Dynamic element discovery via body snapshot to avoid timeouts
-      cy.get('body', { timeout: 10000 }).then($body => {
-        try {
-          const els = $body.find('a, button, input, textarea, select, img');
-          cy.aiLog('discoveredElements', { count: els.length });
-          const sample = Array.from(els).slice(0, 10).map(el => ({ tag: el.tagName, text: (el.innerText || '').slice(0, 40) }));
-          cy.aiLog('elementSample', { sample });
-        } catch (e) {
-          cy.task('ai:log', { type: 'error', message: 'elementDiscoveryFailed', detail: String(e) });
+    const missingLabel = Array.from(doc.querySelectorAll('input:not([type="hidden"]), textarea, select'))
+      .filter(inp => {
+        const hasLabel = inp.id && doc.querySelector(`label[for="${inp.id}"]`)
+        const hasAria = inp.getAttribute('aria-label') || inp.getAttribute('aria-labelledby')
+        return !hasLabel && !hasAria
+      })
+      .map((inp, idx) => {
+        const classes = (inp.className || '').trim().split(/\s+/).filter(c => c && !c.startsWith('ng-')).slice(0, 3).join(' ')
+        return {
+          tag: inp.tagName.toLowerCase(),
+          type: inp.getAttribute('type') || null,
+          name: inp.getAttribute('name') || null,
+          id: inp.id || null,
+          placeholder: inp.getAttribute('placeholder') || null,
+          formcontrolname: inp.getAttribute('formcontrolname') || null,
+          ariaDescribedby: inp.getAttribute('aria-describedby') || null,
+          classSnippet: classes || null,
+          domIndex: idx,
         }
-      }, (err) => {
-        cy.task('ai:log', { type: 'error', message: 'bodySnapshotFailed', detail: String(err) });
-      });
+      })
 
-      // Performance monitoring: safe access to navigation timing
-      cy.window().then(win => {
-        try {
-          const nav = win.performance && (win.performance.getEntriesByType ? win.performance.getEntriesByType('navigation')[0] : null);
-          let load = null;
-          if (nav && nav.loadEventEnd) load = nav.loadEventEnd - (nav.startTime || 0);
-          else if (win.performance && win.performance.timing && win.performance.timing.loadEventEnd) {
-            const t = win.performance.timing;
-            load = t.loadEventEnd && t.navigationStart ? t.loadEventEnd - t.navigationStart : null;
-          }
-          if (load !== null) {
-            cy.aiLog('performance', { load });
-            if (load > 5000) cy.task('ai:log', { type: 'anomaly', anomalyType: 'slow_page', severity: 'high', message: `Load time ${load}ms` });
-          }
-        } catch (e) {
-          cy.task('ai:log', { type: 'error', message: 'performanceCheckFailed', detail: String(e) });
-        }
-      }, (err) => {
-        cy.task('ai:log', { type: 'error', message: 'windowAccessFailed', detail: String(err) });
-      });
+    const negativeFocus = Array.from(doc.querySelectorAll('[tabindex="-1"]'))
+      .filter(el => ['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName))
+      .map(el => ({
+        tag: el.tagName.toLowerCase(),
+        text: (el.textContent || '').trim().slice(0, 80),
+      }))
 
-      // Accessibility quick scan: images with missing alt - log but do not fail
-      cy.get('img', { timeout: 5000 }).then($imgs => {
-        try {
-          const missingAlt = Array.from($imgs).filter(img => !(img.getAttribute && (img.getAttribute('alt') || '').trim())).slice(0, 10).map(i => i.src || '');
-          if (missingAlt.length) cy.aiLog('accessibility.missingAlt', { count: missingAlt.length, examples: missingAlt });
-        } catch (e) {
-          cy.task('ai:log', { type: 'error', message: 'accessibilityScanFailed', detail: String(e) });
-        }
-      }, (err) => {
-        cy.task('ai:log', { type: 'error', message: 'imgCollectionFailed', detail: String(err) });
-      });
+    const landmarks = {
+      main: doc.querySelectorAll('main, [role="main"]').length,
+      nav: doc.querySelectorAll('nav, [role="navigation"]').length,
+      header: doc.querySelectorAll('header, [role="banner"]').length,
+      footer: doc.querySelectorAll('footer, [role="contentinfo"]').length,
+    }
 
-      // Capture screenshot in a fail-safe way (command already swallows failures)
-      cy.captureAIScreenshot('ai-exploratory-home').then(() => {}, (err) => {
-        cy.task('ai:log', { type: 'error', message: 'screenshotFailed', detail: String(err) });
-      });
-    }, (err) => {
-      cy.task('ai:log', { type: 'error', message: 'visitFailed', detail: String(err) });
-    });
-  });
-});
+    const summary = {
+      url: doc.location.href,
+      title: doc.title,
+      mode: INTERACTIVE ? 'interactive' : 'automated',
+      scanLabel,
+      axeViolations: violations.length,
+      byImpact: violations.reduce((acc, v) => { acc[v.impact] = (acc[v.impact] || 0) + 1; return acc }, {}),
+      missingAltCount: missingAlt.length,
+      missingLabelCount: missingLabel.length,
+      negativeFocusCount: negativeFocus.length,
+      landmarks,
+      elementCounts: counts,
+    }
+
+    cy.log(`[wcag-audit] ${scanLabel} — ${violations.length} violations — ${JSON.stringify(summary.byImpact)}`)
+    cy.task('ai:log', { type: 'wcagAudit', summary, violations, missingAlt, missingLabel, negativeFocus })
+  })
+
+  // Screenshot lives under the session subfolder so it's co-located with its reports.
+  // Filename is just the scanLabel (e.g. scan-1.png) — the session folder provides context.
+  cy.screenshot(`ai-analysis/${SESSION_ID}/${scanLabel}`, { capture: 'viewport' }).then(
+    () => cy.task('ai:log', { type: 'step', step: 'screenshot', details: { name: scanLabel } }),
+    (err) => cy.task('ai:log', { type: 'error', message: 'screenshotFailed', detail: String(err) })
+  )
+
+  // Move screenshot from cypress/screenshots/…/<SESSION_ID>/ into the session report
+  // directory so all session output (JSON, HTML, PNG) is colocated in one folder.
+  cy.task('ai:moveScreenshot', { scanLabel }).then(result => {
+    if (result.error) cy.log(`[wcag-audit] screenshot move failed: ${result.error}`)
+    else cy.log(`[wcag-audit] screenshot → ${result.path}`)
+  })
+
+  cy.task('ai:save').then(result => {
+    cy.log(result.error ? `[wcag-audit] ERROR saving JSON: ${result.error}` : `[wcag-audit] JSON → ${result.path}`)
+  })
+
+  cy.task('ai:saveHtml', { scanLabel }).then(result => {
+    if (result.error) {
+      cy.log(`[wcag-audit] ERROR generating HTML: ${result.error}`)
+    } else {
+      cy.log(`[wcag-audit] HTML → ${result.path}${result.screenshot ? ` (screenshot: ${result.screenshot})` : ''}`)
+    }
+  })
+
+  cy.task('ai:saveCombinedHtml').then(result => {
+    if (!result.error) {
+      cy.log(`[wcag-audit] Combined report → ${result.path} (${result.scanCount} scan${result.scanCount !== 1 ? 's' : ''})`)
+    }
+  })
+}
+
+// ── spec ─────────────────────────────────────────────────────────────────────
+
+describe('AI Exploratory — WCAG 2.1 AA Accessibility Audit', () => {
+  it('WCAG audit', function () {
+    cy.visit(TARGET_URL, { failOnStatusCode: false })
+
+    // FAILURE HERE → Angular didn't boot within 20s; check BASE_URL and network access.
+    cy.get('input, ion-input, ion-select, select, textarea, button, ion-button', { timeout: 20000 })
+      .should('exist')
+
+    if (INTERACTIVE) {
+      doScanCycle(1)
+    } else {
+      // Automated: scroll to flush lazy-rendered below-the-fold components.
+      cy.scrollTo('bottom', { ensureScrollable: false, duration: 2000 })
+      cy.wait(1500)
+      cy.scrollTo('top', { ensureScrollable: false })
+      cy.wait(500)
+      runAudit('scan-1')
+    }
+  })
+})

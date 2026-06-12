@@ -8,17 +8,24 @@
     "cy:run": "cypress run --reporter mochawesome",
     "test:parabank": "cross-env CYPEX_SITE=parabank npm run cy:run -- --spec 'cypress/e2e/exploratory/parabank-exploratory.cy.js'",
     "test:saucedemo": "cross-env CYPEX_SITE=saucedemo npm run cy:run -- --spec 'cypress/e2e/exploratory/saucedemo-checkout.cy.js'",
-    "test:ai": "npm run cy:run -- --spec 'cypress/e2e/ai-driven/**/*.cy.js'",
+    "test:ai": "npm run cy:run -- --spec 'cypress/e2e/ai-driven/ai-exploratory.cy.js'",
+    "test:ai_interactive": "cypress open --e2e --env WCAG_INTERACTIVE=true",
     "test:all": "npm run cy:run"
   },
-  "keywords": ["cypress","automation","ai","exploratory","testing"],
+  "keywords": [
+    "cypress",
+    "automation",
+    "ai",
+    "exploratory",
+    "testing"
+  ],
   "author": "Saran",
   "license": "MIT",
-    "devDependencies": {
-    "cypress-axe": "^1.0.0",
+  "devDependencies": {
     "@faker-js/faker": "^8.0.2",
-    "cypress": "^15.6.0",
     "cross-env": "^7.0.3",
+    "cypress": "^15.16.0",
+    "cypress-axe": "^1.0.0",
     "mochawesome": "^7.1.3",
     "mochawesome-merge": "^4.2.0",
     "mochawesome-report-generator": "^6.2.1"
