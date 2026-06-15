@@ -170,7 +170,7 @@ function labelTable(rows) {
 // ── single-scan body (no html/head/body wrapper) ──────────────────────────────
 
 function generateScanBody(audit, date, screenshotRelPath) {
-  const { summary: s = {}, violations = [], missingAlt = [], missingLabel = [], negativeFocus = [], smallTargets = [] } = audit;
+  const { summary: s = {}, violations = [], missingAlt = [], missingLabel = [], negativeFocus = [], smallTargets = [], headingIssues = [] } = audit;
   const byImpact = s.byImpact || {};
   const lm = s.landmarks || {};
   const ec = s.elementCounts || {};
@@ -221,7 +221,8 @@ function generateScanBody(audit, date, screenshotRelPath) {
     ${scoreCard(byImpact.minor    || 0, 'Minor',           'axe WCAG Advisory', '#2563eb')}
     ${scoreCard(s.missingLabelCount || 0, 'Missing Labels', 'SC 1.3.1 / 4.1.2', '#7c3aed')}
     ${scoreCard(s.missingAltCount   || 0, 'Missing Alt',    'SC 1.1.1',         '#0891b2')}
-    ${scoreCard(s.smallTargetCount  || 0, 'Small Targets',  'SC 2.5.8 / 44px',  '#f59e0b')}
+    ${scoreCard(s.smallTargetCount   || 0, 'Small Targets',  'SC 2.5.8 / 44px',  '#f59e0b')}
+    ${scoreCard(s.headingIssueCount  || 0, 'Heading Issues', 'SC 1.3.1 / 2.4.6', '#8b5cf6')}
   </div>
 
   <!-- Landmark coverage -->
@@ -320,6 +321,26 @@ function generateScanBody(audit, date, screenshotRelPath) {
       }).join('')}</tbody>
     </table>
   </div>` : ''}
+
+  ${headingIssues.length ? `<!-- Heading hierarchy -->
+  <div style="background:#fff;border-radius:10px;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:20px">
+    <h2>Document Structure <span style="font-weight:400;font-size:13px;color:#64748b">SC 1.3.1 / 2.4.6</span></h2>
+    <p style="font-size:13px;color:#64748b;margin-bottom:14px">
+      Headings must start with a single <code>&lt;h1&gt;</code> and not skip levels. Level skips break the document outline for screen reader users.
+    </p>
+    <ol style="padding-left:20px;margin:0">${headingIssues.map(issue => {
+      const icon = issue.type === 'level-skip' ? '&#8618;' : '&#9888;';
+      const color = '#92400e';
+      return `<li style="font-size:13px;color:${color};padding:6px 0;border-bottom:1px solid #fef3c7">
+        <span style="margin-right:6px">${icon}</span>
+        <strong>${esc(issue.message)}</strong>${issue.text ? ` &mdash; <em style="color:#64748b">${esc(issue.text)}</em>` : ''}
+      </li>`;
+    }).join('')}</ol>
+  </div>` : `<!-- Heading hierarchy: clean -->
+  <div style="background:#fff;border-radius:10px;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:20px">
+    <h2>Document Structure <span style="font-weight:400;font-size:13px;color:#64748b">SC 1.3.1 / 2.4.6</span></h2>
+    <p style="color:#16a34a;font-size:14px;font-weight:600">Heading hierarchy is correct &#10003;</p>
+  </div>`}
 
   <!-- Element inventory -->
   <div style="background:#fff;border-radius:10px;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:20px">

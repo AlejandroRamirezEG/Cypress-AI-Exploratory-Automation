@@ -243,6 +243,25 @@ function runAudit(scanLabel) {
         text: (el.textContent || '').trim().slice(0, 80),
       }))
 
+    const headingIssues = (() => {
+      const headings = Array.from(doc.querySelectorAll('h1,h2,h3,h4,h5,h6')).map(el => ({
+        level: parseInt(el.tagName[1], 10),
+        text: (el.textContent || '').trim().slice(0, 80),
+      }))
+      const issues = []
+      const h1Count = headings.filter(h => h.level === 1).length
+      if (h1Count === 0) issues.push({ type: 'missing-h1', message: 'No h1 found on the page', level: null, text: null })
+      if (h1Count > 1) issues.push({ type: 'multiple-h1', message: `${h1Count} h1 elements found — only one expected`, level: null, text: null })
+      for (let i = 1; i < headings.length; i++) {
+        const prev = headings[i - 1]
+        const curr = headings[i]
+        if (curr.level > prev.level + 1) {
+          issues.push({ type: 'level-skip', message: `h${prev.level} → h${curr.level} skips a level`, level: curr.level, text: curr.text })
+        }
+      }
+      return issues
+    })()
+
     const smallTargets = Array.from(
       doc.querySelectorAll('button, a[href], [role="button"], ion-button, input:not([type="hidden"]), ion-input')
     )
@@ -284,13 +303,14 @@ function runAudit(scanLabel) {
       missingAltCount: missingAlt.length,
       missingLabelCount: missingLabel.length,
       negativeFocusCount: negativeFocus.length,
+      headingIssueCount: headingIssues.length,
       smallTargetCount: smallTargets.length,
       landmarks,
       elementCounts: counts,
     }
 
     cy.log(`[wcag-audit] ${scanLabel} — ${violations.length} violations — ${JSON.stringify(summary.byImpact)}`)
-    cy.task('ai:log', { type: 'wcagAudit', summary, violations, missingAlt, missingLabel, negativeFocus, smallTargets })
+    cy.task('ai:log', { type: 'wcagAudit', summary, violations, missingAlt, missingLabel, negativeFocus, smallTargets, headingIssues })
   })
 
   // Screenshot lives under the session subfolder so it's co-located with its reports.
