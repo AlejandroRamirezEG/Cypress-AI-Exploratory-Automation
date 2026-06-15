@@ -170,7 +170,7 @@ function labelTable(rows) {
 // ── single-scan body (no html/head/body wrapper) ──────────────────────────────
 
 function generateScanBody(audit, date, screenshotRelPath) {
-  const { summary: s = {}, violations = [], missingAlt = [], missingLabel = [], negativeFocus = [] } = audit;
+  const { summary: s = {}, violations = [], missingAlt = [], missingLabel = [], negativeFocus = [], smallTargets = [] } = audit;
   const byImpact = s.byImpact || {};
   const lm = s.landmarks || {};
   const ec = s.elementCounts || {};
@@ -221,6 +221,7 @@ function generateScanBody(audit, date, screenshotRelPath) {
     ${scoreCard(byImpact.minor    || 0, 'Minor',           'axe WCAG Advisory', '#2563eb')}
     ${scoreCard(s.missingLabelCount || 0, 'Missing Labels', 'SC 1.3.1 / 4.1.2', '#7c3aed')}
     ${scoreCard(s.missingAltCount   || 0, 'Missing Alt',    'SC 1.1.1',         '#0891b2')}
+    ${scoreCard(s.smallTargetCount  || 0, 'Small Targets',  'SC 2.5.8 / 44px',  '#f59e0b')}
   </div>
 
   <!-- Landmark coverage -->
@@ -288,6 +289,35 @@ function generateScanBody(audit, date, screenshotRelPath) {
         <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-family:monospace;font-size:12px">${esc(el.tag)}</td>
         <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;color:#64748b">${esc(el.text || '—')}</td>
       </tr>`).join('')}</tbody>
+    </table>
+  </div>` : ''}
+
+  ${smallTargets.length ? `<!-- Small touch targets -->
+  <div style="background:#fff;border-radius:10px;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:20px">
+    <h2>Small Touch Targets <span style="font-weight:400;font-size:13px;color:#64748b">WCAG 2.2 SC 2.5.8</span></h2>
+    <p style="font-size:13px;color:#64748b;margin-bottom:14px">
+      Interactive elements must be at least 24×24 px (WCAG 2.2 failure) and ideally 44×44 px (iOS HIG / Material Design recommendation).
+    </p>
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0">
+        <th style="padding:8px 10px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">Element</th>
+        <th style="padding:8px 10px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">Text / Label</th>
+        <th style="padding:8px 10px;text-align:center;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">W</th>
+        <th style="padding:8px 10px;text-align:center;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">H</th>
+        <th style="padding:8px 10px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">Severity</th>
+      </tr></thead>
+      <tbody>${smallTargets.map(el => {
+        const sevColor = el.severity === 'fail' ? '#dc2626' : '#d97706';
+        const sevBg    = el.severity === 'fail' ? '#fef2f2' : '#fffbeb';
+        const sevLabel = el.severity === 'fail' ? 'Fail &lt;24px' : 'Warn &lt;44px';
+        return `<tr>
+        <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-family:monospace;font-size:12px">${esc(el.tag)}</td>
+        <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;color:#64748b;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(el.text || '—')}</td>
+        <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;text-align:center;font-weight:600;color:${el.w < 24 ? '#dc2626' : el.w < 44 ? '#d97706' : '#22c55e'}">${el.w}</td>
+        <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;text-align:center;font-weight:600;color:${el.h < 24 ? '#dc2626' : el.h < 44 ? '#d97706' : '#22c55e'}">${el.h}</td>
+        <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9"><span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;background:${sevBg};color:${sevColor}">${sevLabel}</span></td>
+      </tr>`;
+      }).join('')}</tbody>
     </table>
   </div>` : ''}
 

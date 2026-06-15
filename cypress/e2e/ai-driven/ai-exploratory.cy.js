@@ -243,6 +243,18 @@ function runAudit(scanLabel) {
         text: (el.textContent || '').trim().slice(0, 80),
       }))
 
+    const smallTargets = Array.from(
+      doc.querySelectorAll('button, a[href], [role="button"], ion-button, input:not([type="hidden"]), ion-input')
+    )
+      .map(el => {
+        const rect = el.getBoundingClientRect()
+        const w = Math.round(rect.width)
+        const h = Math.round(rect.height)
+        const text = (el.textContent || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '').trim().slice(0, 60)
+        return { tag: el.tagName.toLowerCase(), text, w, h, severity: (w < 24 || h < 24) ? 'fail' : 'warn' }
+      })
+      .filter(({ w, h }) => (w > 0 || h > 0) && (w < 44 || h < 44))
+
     const landmarks = {
       main: doc.querySelectorAll('main, [role="main"]').length,
       nav: doc.querySelectorAll('nav, [role="navigation"]').length,
@@ -272,12 +284,13 @@ function runAudit(scanLabel) {
       missingAltCount: missingAlt.length,
       missingLabelCount: missingLabel.length,
       negativeFocusCount: negativeFocus.length,
+      smallTargetCount: smallTargets.length,
       landmarks,
       elementCounts: counts,
     }
 
     cy.log(`[wcag-audit] ${scanLabel} — ${violations.length} violations — ${JSON.stringify(summary.byImpact)}`)
-    cy.task('ai:log', { type: 'wcagAudit', summary, violations, missingAlt, missingLabel, negativeFocus })
+    cy.task('ai:log', { type: 'wcagAudit', summary, violations, missingAlt, missingLabel, negativeFocus, smallTargets })
   })
 
   // Screenshot lives under the session subfolder so it's co-located with its reports.
