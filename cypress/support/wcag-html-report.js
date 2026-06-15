@@ -24,6 +24,28 @@ const CSS_TABS = `
   .panel.wrap{padding-top:28px}
 `;
 
+// Section open/closed state is stored in the browser's localStorage under
+// 'wcag-section-prefs'. Works for file:// reports opened directly — nothing
+// is written to disk, so there is nothing to gitignore.
+const JS_PREFS = `
+<script>
+(function(){
+  var KEY='wcag-section-prefs',prefs={};
+  try{prefs=JSON.parse(localStorage.getItem(KEY)||'{}');}catch(e){}
+  function init(){
+    document.querySelectorAll('details[data-wcag-section]').forEach(function(d){
+      var k=d.getAttribute('data-wcag-section');
+      if(k in prefs)d.open=prefs[k];
+      d.addEventListener('toggle',function(){
+        prefs[k]=d.open;
+        try{localStorage.setItem(KEY,JSON.stringify(prefs));}catch(e){}
+      });
+    });
+  }
+  if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}else{init();}
+})();
+</script>`;
+
 // ── rendering helpers ─────────────────────────────────────────────────────────
 
 function esc(v) {
@@ -31,20 +53,14 @@ function esc(v) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-// Convert a URL path segment or hash segment to a human-readable label.
-// "seekers-pool" → "Seekers Pool", "archiveContacts" → "Archive Contacts"
 function prettifySegment(seg) {
   return seg
-    .replace(/([a-z])([A-Z])/g, '$1 $2')  // camelCase → words
-    .replace(/[-_]+/g, ' ')               // kebab/snake → spaces
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/[-_]+/g, ' ')
     .replace(/\b\w/g, c => c.toUpperCase())
     .trim();
 }
 
-// Derive a short page label from a scan's collected data.
-// Priority: DOM heading (h1/ion-title/h2 captured at scan time)
-//         → URL path segment → hash segment (Angular hash routing)
-//         → page title → null
 function pageLabel(url, title, pageHeading) {
   if (pageHeading && pageHeading.trim()) {
     const h = pageHeading.trim();
@@ -54,7 +70,6 @@ function pageLabel(url, title, pageHeading) {
     const parsed = new URL(url);
     const pathSeg = parsed.pathname.split('/').filter(Boolean).pop();
     if (pathSeg) return prettifySegment(pathSeg.replace(/\.[^.]+$/, ''));
-    // Angular hash routing: /#/seekers-pool
     const hashSeg = parsed.hash.replace(/^#\/?/, '').split('/').filter(Boolean).pop();
     if (hashSeg) return prettifySegment(hashSeg.replace(/\.[^.]+$/, ''));
   } catch {}
@@ -167,6 +182,59 @@ function labelTable(rows) {
 </table>`;
 }
 
+// ── collapsible section helpers ───────────────────────────────────────────────
+
+function passBadge() {
+  return `<span style="font-size:11px;font-weight:600;background:#dcfce7;color:#166534;padding:2px 9px;border-radius:10px;white-space:nowrap">&#10003; Pass</span>`;
+}
+
+function issueBadge(n) {
+  if (n === 0) return passBadge();
+  return `<span style="font-size:11px;font-weight:700;background:#fef2f2;color:#dc2626;padding:2px 9px;border-radius:10px;white-space:nowrap">${n} issue${n !== 1 ? 's' : ''}</span>`;
+}
+
+function warnBadge(n) {
+  if (n === 0) return passBadge();
+  return `<span style="font-size:11px;font-weight:700;background:#fffbeb;color:#d97706;padding:2px 9px;border-radius:10px;white-space:nowrap">${n} warning${n !== 1 ? 's' : ''}</span>`;
+}
+
+function violationsBadge(violations, byImpact) {
+  if (!violations.length) return passBadge();
+  const total = violations.length;
+  const crit = byImpact.critical || 0;
+  const ser  = byImpact.serious  || 0;
+  const color = crit ? '#dc2626' : ser ? '#ea580c' : '#d97706';
+  const bg    = crit ? '#fef2f2' : ser ? '#fff7ed' : '#fffbeb';
+  return `<span style="font-size:11px;font-weight:700;background:${bg};color:${color};padding:2px 9px;border-radius:10px;white-space:nowrap">${total} violation${total !== 1 ? 's' : ''}${crit ? ` · ${crit} critical` : ''}</span>`;
+}
+
+function touchTargetBadge(smallTargets) {
+  if (!smallTargets.length) return passBadge();
+  const fails = smallTargets.filter(t => t.severity === 'fail').length;
+  if (fails > 0) {
+    const warns = smallTargets.length - fails;
+    return `<span style="font-size:11px;font-weight:700;background:#fef2f2;color:#dc2626;padding:2px 9px;border-radius:10px;white-space:nowrap">${fails} fail${fails !== 1 ? 's' : ''}${warns ? ` · ${warns} warn` : ''}</span>`;
+  }
+  return warnBadge(smallTargets.length);
+}
+
+function sectionDivider(label) {
+  return `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#94a3b8;padding:16px 2px 8px">${esc(label)}</div>`;
+}
+
+function sectionWrap(key, title, scRef, badge, isOpen, content) {
+  return `<details data-wcag-section="${esc(key)}"${isOpen ? ' open' : ''} style="background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:14px;overflow:hidden">
+  <summary style="padding:14px 20px;cursor:pointer;list-style:none;display:flex;align-items:center;gap:10px;flex-wrap:wrap;user-select:none">
+    <span style="font-weight:700;font-size:15px;color:#0f172a;flex:1">${esc(title)}</span>
+    ${scRef ? `<span style="font-size:11px;color:#94a3b8;font-weight:500;white-space:nowrap">${esc(scRef)}</span>` : ''}
+    ${badge}
+  </summary>
+  <div style="padding:0 20px 20px">
+    ${content}
+  </div>
+</details>`;
+}
+
 // ── single-scan body (no html/head/body wrapper) ──────────────────────────────
 
 function generateScanBody(audit, date, screenshotRelPath) {
@@ -177,6 +245,7 @@ function generateScanBody(audit, date, screenshotRelPath) {
   const sortedViolations = [...violations].sort((a, b) => (SORT_ORDER[a.impact] ?? 9) - (SORT_ORDER[b.impact] ?? 9));
   const missingLandmarks = ['nav', 'header', 'footer'].filter(l => !(lm[l] > 0));
   const scanNum = s.scanLabel ? parseInt(s.scanLabel.replace(/^scan-/, ''), 10) : null;
+  const inventoryTotal = Object.values(ec).reduce((a, b) => a + b, 0);
 
   return `
   <!-- Header -->
@@ -200,158 +269,177 @@ function generateScanBody(audit, date, screenshotRelPath) {
     </div>
   </div>
 
-  ${screenshotRelPath ? `<!-- Screenshot -->
-  <details open style="margin-bottom:28px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">
-    <summary style="padding:12px 18px;cursor:pointer;list-style:none;display:flex;align-items:center;gap:10px;font-size:13px;font-weight:600;color:#475569;user-select:none">
-      <span style="font-size:16px">&#128444;</span>
-      Page screenshot
-      <span style="font-weight:400;font-family:monospace;font-size:11px;color:#94a3b8;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(screenshotRelPath)}</span>
-    </summary>
-    <div style="padding:0 18px 16px;text-align:center">
-      <img src="${esc(screenshotRelPath)}" alt="Page state at audit time"
-           style="max-width:520px;width:100%;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.12);display:inline-block">
+  <!-- Score cards — axe severity row + heuristics row -->
+  <div style="margin-bottom:28px">
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+      ${scoreCard(byImpact.critical || 0, 'Critical',  'axe WCAG Failure',  '#dc2626')}
+      ${scoreCard(byImpact.serious  || 0, 'Serious',   'axe WCAG Failure',  '#ea580c')}
+      ${scoreCard(byImpact.moderate || 0, 'Moderate',  'axe WCAG Warning',  '#ca8a04')}
+      ${scoreCard(byImpact.minor    || 0, 'Minor',     'axe WCAG Advisory', '#2563eb')}
     </div>
-  </details>` : ''}
-
-  <!-- Score cards -->
-  <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:28px">
-    ${scoreCard(byImpact.critical || 0, 'Critical',        'axe WCAG Failure',  '#dc2626')}
-    ${scoreCard(byImpact.serious  || 0, 'Serious',         'axe WCAG Failure',  '#ea580c')}
-    ${scoreCard(byImpact.moderate || 0, 'Moderate',        'axe WCAG Warning',  '#ca8a04')}
-    ${scoreCard(byImpact.minor    || 0, 'Minor',           'axe WCAG Advisory', '#2563eb')}
-    ${scoreCard(s.missingLabelCount || 0, 'Missing Labels', 'SC 1.3.1 / 4.1.2', '#7c3aed')}
-    ${scoreCard(s.missingAltCount   || 0, 'Missing Alt',    'SC 1.1.1',         '#0891b2')}
-    ${scoreCard(s.smallTargetCount   || 0, 'Small Targets',  'SC 2.5.8 / 44px',  '#f59e0b')}
-    ${scoreCard(s.headingIssueCount  || 0, 'Heading Issues', 'SC 1.3.1 / 2.4.6', '#8b5cf6')}
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      ${scoreCard(s.missingLabelCount || 0, 'Missing Labels', 'SC 1.3.1 / 4.1.2', '#7c3aed')}
+      ${scoreCard(s.missingAltCount   || 0, 'Missing Alt',    'SC 1.1.1',          '#0891b2')}
+      ${scoreCard(s.smallTargetCount  || 0, 'Small Targets',  'SC 2.5.8 / 44px',   '#f59e0b')}
+      ${scoreCard(s.headingIssueCount || 0, 'Heading Issues', 'SC 1.3.1 / 2.4.6',  '#8b5cf6')}
+    </div>
   </div>
 
-  <!-- Landmark coverage -->
-  <div style="background:#fff;border-radius:10px;padding:20px 24px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:28px">
-    <h2 style="margin-bottom:10px">Landmark Coverage <span style="font-weight:400;font-size:13px;color:#64748b">WCAG SC 1.3.6 / 2.4.1</span></h2>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:${missingLandmarks.length ? '12' : '0'}px">
+  ${sectionDivider('Findings')}
+
+  ${screenshotRelPath ? sectionWrap(
+    'screenshot', 'Page Screenshot', null,
+    `<span style="font-size:11px;font-weight:400;font-family:monospace;color:#94a3b8;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block">${esc(screenshotRelPath)}</span>`,
+    true,
+    `<div style="text-align:center;padding-top:8px">
+      <img src="${esc(screenshotRelPath)}" alt="Page state at audit time"
+           style="max-width:520px;width:100%;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.12);display:inline-block">
+    </div>`
+  ) : ''}
+
+  ${sectionWrap(
+    'axe-violations',
+    `${sortedViolations.length} Axe Violation${sortedViolations.length !== 1 ? 's' : ''}`,
+    null,
+    violationsBadge(sortedViolations, byImpact),
+    sortedViolations.length > 0,
+    sortedViolations.length
+      ? `<p style="font-size:13px;color:#64748b;margin:8px 0 14px">Click a row to expand details and see affected elements.</p>
+         ${sortedViolations.map(violationCard).join('\n')}`
+      : `<p style="color:#166334;font-size:14px;font-weight:600;padding:8px 0">No axe violations found &#10003;</p>`
+  )}
+
+  ${sectionWrap(
+    'missing-labels', 'Inputs Missing Accessible Label', 'SC 1.3.1 / 4.1.2',
+    issueBadge(missingLabel.length),
+    missingLabel.length > 0,
+    `<p style="font-size:13px;color:#64748b;margin:8px 0 14px">
+      Each input needs a visible <code>&lt;label for&gt;</code>, <code>aria-label</code>, or <code>aria-labelledby</code>.
+      A <code>placeholder</code> alone does not count as a label.
+    </p>
+    ${labelTable(missingLabel)}`
+  )}
+
+  ${sectionWrap(
+    'missing-alt', 'Images Missing Alt Text', 'SC 1.1.1',
+    issueBadge(missingAlt.length),
+    missingAlt.length > 0,
+    missingAlt.length
+      ? `<p style="font-size:13px;color:#64748b;margin:8px 0 14px">Meaningful images need descriptive <code>alt</code> text. Decorative images need <code>alt=""</code>.</p>
+         <table style="width:100%;border-collapse:collapse;font-size:13px">
+           <thead><tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0">
+             <th style="padding:8px 10px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase">src</th>
+             <th style="padding:8px 10px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase">classes</th>
+           </tr></thead>
+           <tbody>${missingAlt.map(img => `<tr>
+             <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;word-break:break-all">${esc(img.src || '—')}</td>
+             <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;color:#64748b">${esc(img.classes || '—')}</td>
+           </tr>`).join('')}</tbody>
+         </table>`
+      : `<p style="color:#166334;font-size:14px;font-weight:600;padding:8px 0">No images missing alt text &#10003;</p>`
+  )}
+
+  ${sectionWrap(
+    'touch-targets', 'Small Touch Targets', 'SC 2.5.8',
+    touchTargetBadge(smallTargets),
+    smallTargets.length > 0,
+    smallTargets.length
+      ? `<p style="font-size:13px;color:#64748b;margin:8px 0 14px">
+           Interactive elements must be at least 24×24 px (WCAG 2.2 failure) and ideally 44×44 px (iOS HIG / Material Design recommendation).
+         </p>
+         <table style="width:100%;border-collapse:collapse;font-size:13px">
+           <thead><tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0">
+             <th style="padding:8px 10px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">Element</th>
+             <th style="padding:8px 10px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">Text / Label</th>
+             <th style="padding:8px 10px;text-align:center;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">W</th>
+             <th style="padding:8px 10px;text-align:center;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">H</th>
+             <th style="padding:8px 10px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">Severity</th>
+           </tr></thead>
+           <tbody>${smallTargets.map(el => {
+             const sevColor = el.severity === 'fail' ? '#dc2626' : '#d97706';
+             const sevBg    = el.severity === 'fail' ? '#fef2f2' : '#fffbeb';
+             const sevLabel = el.severity === 'fail' ? 'Fail &lt;24px' : 'Warn &lt;44px';
+             return `<tr>
+             <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-family:monospace;font-size:12px">${esc(el.tag)}</td>
+             <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;color:#64748b;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(el.text || '—')}</td>
+             <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;text-align:center;font-weight:600;color:${el.w < 24 ? '#dc2626' : el.w < 44 ? '#d97706' : '#22c55e'}">${el.w}</td>
+             <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;text-align:center;font-weight:600;color:${el.h < 24 ? '#dc2626' : el.h < 44 ? '#d97706' : '#22c55e'}">${el.h}</td>
+             <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9"><span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;background:${sevBg};color:${sevColor}">${sevLabel}</span></td>
+           </tr>`;
+           }).join('')}</tbody>
+         </table>`
+      : `<p style="color:#166334;font-size:14px;font-weight:600;padding:8px 0">All interactive elements meet the 44×44 px target size &#10003;</p>`
+  )}
+
+  ${sectionWrap(
+    'keyboard', 'Focusable Elements Removed from Tab Order', 'SC 2.1.1',
+    issueBadge(negativeFocus.length),
+    negativeFocus.length > 0,
+    negativeFocus.length
+      ? `<p style="font-size:13px;color:#64748b;margin:8px 0 14px">
+           These interactive elements have <code>tabindex="-1"</code>. Confirm each is intentionally unreachable via keyboard.
+         </p>
+         <table style="width:100%;border-collapse:collapse;font-size:13px">
+           <thead><tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0">
+             <th style="padding:8px 10px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase">Element</th>
+             <th style="padding:8px 10px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase">Text</th>
+           </tr></thead>
+           <tbody>${negativeFocus.map(el => `<tr>
+             <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-family:monospace;font-size:12px">${esc(el.tag)}</td>
+             <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;color:#64748b">${esc(el.text || '—')}</td>
+           </tr>`).join('')}</tbody>
+         </table>`
+      : `<p style="color:#166334;font-size:14px;font-weight:600;padding:8px 0">No interactive elements found with <code>tabindex="-1"</code> &#10003;</p>`
+  )}
+
+  ${sectionDivider('Structure')}
+
+  ${sectionWrap(
+    'structure', 'Document Structure', 'SC 1.3.1 / 2.4.6',
+    issueBadge(headingIssues.length),
+    headingIssues.length > 0,
+    headingIssues.length
+      ? `<p style="font-size:13px;color:#64748b;margin:8px 0 14px">
+           Headings must start with a single <code>&lt;h1&gt;</code> and not skip levels. Level skips break the document outline for screen reader users.
+         </p>
+         <ol style="padding-left:20px;margin:0">${headingIssues.map(issue => {
+           const icon = issue.type === 'level-skip' ? '&#8618;' : '&#9888;';
+           return `<li style="font-size:13px;color:#92400e;padding:6px 0;border-bottom:1px solid #fef3c7">
+             <span style="margin-right:6px">${icon}</span>
+             <strong>${esc(issue.message)}</strong>${issue.text ? ` &mdash; <em style="color:#64748b">${esc(issue.text)}</em>` : ''}
+           </li>`;
+         }).join('')}</ol>`
+      : `<p style="color:#166334;font-size:14px;font-weight:600;padding:8px 0">Heading hierarchy is correct &#10003;</p>`
+  )}
+
+  ${sectionWrap(
+    'landmarks', 'Landmark Coverage', 'SC 1.3.6 / 2.4.1',
+    missingLandmarks.length ? issueBadge(missingLandmarks.length) : passBadge(),
+    missingLandmarks.length > 0,
+    `<div style="display:flex;gap:8px;flex-wrap:wrap;padding-top:8px;margin-bottom:${missingLandmarks.length ? '12' : '0'}px">
       ${landmarkPill(lm.main,   'main')}
       ${landmarkPill(lm.nav,    'nav')}
       ${landmarkPill(lm.header, 'header')}
       ${landmarkPill(lm.footer, 'footer')}
     </div>
-    ${missingLandmarks.length ? `<p style="font-size:12px;color:#92400e;background:#fef3c7;border:1px solid #fde68a;padding:8px 12px;border-radius:6px">
-      Missing <strong>${missingLandmarks.map(l => `&lt;${l}&gt;`).join(', ')}</strong> — screen reader users cannot jump directly to these regions. Add semantic elements or <code>role</code> attributes.
-    </p>` : ''}
-  </div>
+    ${missingLandmarks.length ? `<p style="font-size:12px;color:#92400e;background:#fef3c7;border:1px solid #fde68a;padding:8px 12px;border-radius:6px;margin-top:12px">
+      Missing <strong>${missingLandmarks.map(l => `&lt;${l}&gt;`).join(', ')}</strong> — screen reader users cannot jump directly to these regions.
+    </p>` : ''}`
+  )}
 
-  <!-- Violations -->
-  <div style="margin-bottom:28px">
-    <h2>${sortedViolations.length} Axe Violation${sortedViolations.length !== 1 ? 's' : ''} <span style="font-weight:400;font-size:13px;color:#64748b">(click a row to expand)</span></h2>
-    ${sortedViolations.length
-      ? sortedViolations.map(violationCard).join('\n')
-      : `<div style="background:#f0fdf4;border:1px solid #86efac;border-radius:10px;padding:28px;text-align:center;color:#166534;font-size:15px;font-weight:600">No axe violations found &#10003;</div>`}
-  </div>
+  ${sectionDivider('Reference')}
 
-  <!-- Missing input labels -->
-  <div style="background:#fff;border-radius:10px;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:20px">
-    <h2>Inputs Missing Accessible Label <span style="font-weight:400;font-size:13px;color:#64748b">SC 1.3.1 / 4.1.2</span></h2>
-    <p style="font-size:13px;color:#64748b;margin-bottom:14px">
-      Each input needs a visible <code>&lt;label for&gt;</code>, <code>aria-label</code>, or <code>aria-labelledby</code>.
-      A <code>placeholder</code> alone does not count as a label.
-    </p>
-    ${labelTable(missingLabel)}
-  </div>
-
-  ${missingAlt.length ? `<!-- Missing alt text -->
-  <div style="background:#fff;border-radius:10px;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:20px">
-    <h2>Images Missing Alt Text <span style="font-weight:400;font-size:13px;color:#64748b">SC 1.1.1</span></h2>
-    <p style="font-size:13px;color:#64748b;margin-bottom:14px">
-      Meaningful images need descriptive <code>alt</code> text. Decorative images need <code>alt=""</code>.
-    </p>
-    <table style="width:100%;border-collapse:collapse;font-size:13px">
-      <thead><tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0">
-        <th style="padding:8px 10px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase">src</th>
-        <th style="padding:8px 10px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase">classes</th>
-      </tr></thead>
-      <tbody>${missingAlt.map(img => `<tr>
-        <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;word-break:break-all">${esc(img.src || '—')}</td>
-        <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;color:#64748b">${esc(img.classes || '—')}</td>
-      </tr>`).join('')}</tbody>
-    </table>
-  </div>` : ''}
-
-  ${negativeFocus.length ? `<!-- Negative tabindex -->
-  <div style="background:#fff;border-radius:10px;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:20px">
-    <h2>Focusable Elements Removed from Tab Order <span style="font-weight:400;font-size:13px;color:#64748b">SC 2.1.1</span></h2>
-    <p style="font-size:13px;color:#64748b;margin-bottom:14px">
-      These interactive elements have <code>tabindex="-1"</code>. Confirm each is intentionally unreachable via keyboard.
-    </p>
-    <table style="width:100%;border-collapse:collapse;font-size:13px">
-      <thead><tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0">
-        <th style="padding:8px 10px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase">Element</th>
-        <th style="padding:8px 10px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase">Text</th>
-      </tr></thead>
-      <tbody>${negativeFocus.map(el => `<tr>
-        <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-family:monospace;font-size:12px">${esc(el.tag)}</td>
-        <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;color:#64748b">${esc(el.text || '—')}</td>
-      </tr>`).join('')}</tbody>
-    </table>
-  </div>` : ''}
-
-  ${smallTargets.length ? `<!-- Small touch targets -->
-  <div style="background:#fff;border-radius:10px;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:20px">
-    <h2>Small Touch Targets <span style="font-weight:400;font-size:13px;color:#64748b">WCAG 2.2 SC 2.5.8</span></h2>
-    <p style="font-size:13px;color:#64748b;margin-bottom:14px">
-      Interactive elements must be at least 24×24 px (WCAG 2.2 failure) and ideally 44×44 px (iOS HIG / Material Design recommendation).
-    </p>
-    <table style="width:100%;border-collapse:collapse;font-size:13px">
-      <thead><tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0">
-        <th style="padding:8px 10px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">Element</th>
-        <th style="padding:8px 10px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">Text / Label</th>
-        <th style="padding:8px 10px;text-align:center;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">W</th>
-        <th style="padding:8px 10px;text-align:center;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">H</th>
-        <th style="padding:8px 10px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">Severity</th>
-      </tr></thead>
-      <tbody>${smallTargets.map(el => {
-        const sevColor = el.severity === 'fail' ? '#dc2626' : '#d97706';
-        const sevBg    = el.severity === 'fail' ? '#fef2f2' : '#fffbeb';
-        const sevLabel = el.severity === 'fail' ? 'Fail &lt;24px' : 'Warn &lt;44px';
-        return `<tr>
-        <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-family:monospace;font-size:12px">${esc(el.tag)}</td>
-        <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;color:#64748b;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(el.text || '—')}</td>
-        <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;text-align:center;font-weight:600;color:${el.w < 24 ? '#dc2626' : el.w < 44 ? '#d97706' : '#22c55e'}">${el.w}</td>
-        <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;text-align:center;font-weight:600;color:${el.h < 24 ? '#dc2626' : el.h < 44 ? '#d97706' : '#22c55e'}">${el.h}</td>
-        <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9"><span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;background:${sevBg};color:${sevColor}">${sevLabel}</span></td>
-      </tr>`;
-      }).join('')}</tbody>
-    </table>
-  </div>` : ''}
-
-  ${headingIssues.length ? `<!-- Heading hierarchy -->
-  <div style="background:#fff;border-radius:10px;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:20px">
-    <h2>Document Structure <span style="font-weight:400;font-size:13px;color:#64748b">SC 1.3.1 / 2.4.6</span></h2>
-    <p style="font-size:13px;color:#64748b;margin-bottom:14px">
-      Headings must start with a single <code>&lt;h1&gt;</code> and not skip levels. Level skips break the document outline for screen reader users.
-    </p>
-    <ol style="padding-left:20px;margin:0">${headingIssues.map(issue => {
-      const icon = issue.type === 'level-skip' ? '&#8618;' : '&#9888;';
-      const color = '#92400e';
-      return `<li style="font-size:13px;color:${color};padding:6px 0;border-bottom:1px solid #fef3c7">
-        <span style="margin-right:6px">${icon}</span>
-        <strong>${esc(issue.message)}</strong>${issue.text ? ` &mdash; <em style="color:#64748b">${esc(issue.text)}</em>` : ''}
-      </li>`;
-    }).join('')}</ol>
-  </div>` : `<!-- Heading hierarchy: clean -->
-  <div style="background:#fff;border-radius:10px;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:20px">
-    <h2>Document Structure <span style="font-weight:400;font-size:13px;color:#64748b">SC 1.3.1 / 2.4.6</span></h2>
-    <p style="color:#16a34a;font-size:14px;font-weight:600">Heading hierarchy is correct &#10003;</p>
-  </div>`}
-
-  <!-- Element inventory -->
-  <div style="background:#fff;border-radius:10px;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:20px">
-    <h2>Element Inventory</h2>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:12px">
+  ${sectionWrap(
+    'inventory', 'Element Inventory', null,
+    `<span style="font-size:11px;font-weight:500;color:#94a3b8;white-space:nowrap">${inventoryTotal} total</span>`,
+    false,
+    `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:12px;padding-top:8px">
       ${Object.entries(ec).map(([k, v]) => `<div style="text-align:center;padding:14px 8px;background:#f8fafc;border-radius:8px">
         <div style="font-size:26px;font-weight:800;color:${v > 0 ? '#0f172a' : '#cbd5e1'}">${v}</div>
         <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.3px;margin-top:3px">${esc(k)}</div>
       </div>`).join('')}
-    </div>
-  </div>
+    </div>`
+  )}
 
   <!-- Footer -->
   <div style="text-align:center;padding:20px 0 4px;font-size:11px;color:#94a3b8">
@@ -378,6 +466,7 @@ function generateWcagHtml(audit, date, screenshotRelPath) {
 <div class="wrap">
 ${generateScanBody(audit, date, screenshotRelPath)}
 </div>
+${JS_PREFS}
 </body>
 </html>`;
 }
@@ -426,6 +515,7 @@ ${generateScanBody(scan.audit, scan.date, scan.screenshotRelPath)}
     window.scrollTo(0, 0);
   }
 </script>
+${JS_PREFS}
 
 </body>
 </html>`;
