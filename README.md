@@ -72,13 +72,15 @@ No interaction required. Suitable for CI pipelines.
 
 Opens the Cypress App and injects a control bar into the page under test.
 
+![Interactive control bar](docs/screenshots/interactive-bar.png)
+
 The bar provides:
 
 | Control | Action |
 |---------|--------|
 | **🔍 Scan** | Runs the WCAG audit against the current page state and saves a report, then loops back for the next scan |
 | **✓ Done** | Ends the session cleanly; all completed reports remain on disk |
-| **👁 Focus** | Toggles a bright pink `:focus` outline on all AUT elements so you can walk the tab order visually without running a scan. The bar turns amber and shows a warning if focus escapes to the Cypress runner; click anywhere on the page to restore it. The outline is automatically stripped before each screenshot so it never appears in report images. |
+| **👁 Focus** | Toggles a bright pink `:focus` outline on all AUT elements so you can walk the tab order visually without running a scan. The bar turns amber and shows a warning if focus escapes to the Cypress runner; click anywhere on the page to restore it. The outline is automatically stripped before each screenshot so it never appears in report images. ![Focus on page element with control bar](docs/screenshots/focus-on-page.png) |
 | **↑ / ↓** | Moves the bar between the top and bottom of the viewport |
 | **✕** | Collapses the bar to a small pill in the bottom-right corner; click the pill to restore it |
 
@@ -108,6 +110,8 @@ reports/ai-insights/
 
 Self-contained, no external dependencies, all CSS inlined. Includes:
 
+<img src="docs/screenshots/wcag-report-combined.png" width="800"/>
+
 **Score cards**
 - axe-core violations by severity: critical / serious / moderate / minor
 - Heuristic counts: missing labels, missing alt, small touch targets, heading issues
@@ -115,6 +119,7 @@ Self-contained, no external dependencies, all CSS inlined. Includes:
 **Findings (collapsible sections)**
 - Viewport screenshot (annotated with violation bounding boxes when `_boxes` mode is on)
 - Axe-core violations — grouped by designer discipline (Visual / Interaction / Form / Structure) with impact-colored chips, discipline pills, and WCAG SC references
+<img src="docs/screenshots/axe-violations.png" height="400"/>
 - Inputs missing accessible label
 - Images missing alt text
 - Small touch targets (< 44 × 44 px)
@@ -129,6 +134,9 @@ Self-contained, no external dependencies, all CSS inlined. Includes:
 - Element inventory (inputs, buttons, links, images, etc.)
 
 **Report settings (⚙ gear button)**
+
+<img src="docs/screenshots/settings.png" width="200"/>
+
 - *Hide passing* — removes passing sections from the layout to focus on failures
 - *Text size* — S / M / L / XL whole-page zoom
 
