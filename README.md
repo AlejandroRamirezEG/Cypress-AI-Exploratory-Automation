@@ -21,6 +21,10 @@ This project audits Angular/Ionic sign-up and onboarding flows for accessibility
 
 Both modes produce the same output — self-contained HTML reports, a JSON data file, and viewport screenshots — grouped into a session folder so results never overwrite each other.
 
+**Sample Report**
+
+<img src="docs/screenshots/wcag-report-combined.png" width="800"/>
+
 ---
 
 ## Quick Start
@@ -109,8 +113,6 @@ reports/ai-insights/
 ### AI-Scan HTML report (`wcag-report-combined.html`)
 
 Self-contained, no external dependencies, all CSS inlined. Includes:
-
-<img src="docs/screenshots/wcag-report-combined.png" width="800"/>
 
 **Score cards**
 - axe-core violations by severity: critical / serious / moderate / minor
