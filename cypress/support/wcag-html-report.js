@@ -244,6 +244,64 @@ const IMPACT = {
 };
 const SORT_ORDER = { critical: 0, serious: 1, moderate: 2, minor: 3 };
 
+// ── discipline classification ─────────────────────────────────────────────────
+// Maps axe rule IDs → designer-friendly discipline (Visual / Interaction / Form /
+// Structure). Helps designers triage: "these three are color issues, those two are form issues."
+
+const DISCIPLINE_COLORS = {
+  Visual:      { bg: '#ede9fe', color: '#5b21b6' },
+  Interaction: { bg: '#dbeafe', color: '#1e40af' },
+  Form:        { bg: '#d1fae5', color: '#065f46' },
+  Structure:   { bg: '#ffedd5', color: '#9a3412' },
+  Other:       { bg: '#f1f5f9', color: '#475569' },
+};
+
+const DISCIPLINE_ORDER = ['Visual', 'Interaction', 'Form', 'Structure', 'Other'];
+
+const DISCIPLINE_MAP = {
+  // Visual
+  'color-contrast': 'Visual', 'color-contrast-enhanced': 'Visual',
+  'image-alt': 'Visual', 'image-redundant-alt': 'Visual',
+  'background-img-redundant': 'Visual', 'link-in-text-block': 'Visual',
+  'meta-viewport': 'Visual', 'css-orientation-lock': 'Visual',
+  // Interaction
+  'tabindex': 'Interaction', 'scrollable-region-focusable': 'Interaction',
+  'interactive-supports-focus': 'Interaction', 'nested-interactive': 'Interaction',
+  'keyboard': 'Interaction', 'accesskeys': 'Interaction',
+  'focus-order-semantics': 'Interaction', 'focus-visible': 'Interaction',
+  'target-size': 'Interaction', 'pointer-cancelation': 'Interaction',
+  'motion-actuation': 'Interaction',
+  // Form
+  'label': 'Form', 'label-content-name-mismatch': 'Form',
+  'select-name': 'Form', 'textarea-name': 'Form',
+  'input-button-name': 'Form', 'form-field-multiple-labels': 'Form',
+  'autocomplete-valid': 'Form', 'required-children': 'Form',
+  'required-parent': 'Form', 'radiogroup': 'Form',
+  // Structure
+  'bypass': 'Structure', 'skip-link': 'Structure',
+  'page-has-heading-one': 'Structure', 'document-title': 'Structure',
+  'frame-title': 'Structure', 'frame-tested': 'Structure',
+  'html-lang-valid': 'Structure', 'html-has-lang': 'Structure',
+  'valid-lang': 'Structure', 'scope-attr-valid': 'Structure',
+  'td-headers-attr': 'Structure', 'th-has-data-cells': 'Structure',
+  'list': 'Structure', 'listitem': 'Structure',
+  'definition-list': 'Structure', 'dlitem': 'Structure',
+  'duplicate-id': 'Structure', 'duplicate-id-active': 'Structure', 'duplicate-id-aria': 'Structure',
+};
+
+function getDiscipline(v) {
+  if (DISCIPLINE_MAP[v.id]) return DISCIPLINE_MAP[v.id];
+  if (/^(landmark-|heading-|aria-|role-)/.test(v.id)) return 'Structure';
+  if (/^(focus-|keyboard-)/.test(v.id)) return 'Interaction';
+  if (/^(input-|select-|textarea-)/.test(v.id)) return 'Form';
+  const tags = v.wcag || [];
+  if (tags.some(t => /^wcag1[14]/.test(t))) return 'Visual';
+  if (tags.some(t => /^wcag2[125]/.test(t))) return 'Interaction';
+  if (tags.some(t => /^wcag33/.test(t))) return 'Form';
+  if (tags.some(t => /^wcag(1[23]|2[34]|4)/.test(t))) return 'Structure';
+  return 'Other';
+}
+
 function chip(impact) {
   const c = IMPACT[impact] || { chip: '#6b7280' };
   return `<span style="background:${c.chip};color:#fff;padding:3px 9px;border-radius:4px;font-size:11px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;white-space:nowrap">${esc(impact)}</span>`;
@@ -279,9 +337,13 @@ function nodeBlock(n) {
 function violationCard(v) {
   const c = IMPACT[v.impact] || IMPACT.minor;
   const sc = scTags(v.wcag);
+  const disc = getDiscipline(v);
+  const dc = DISCIPLINE_COLORS[disc] || DISCIPLINE_COLORS.Other;
+  const discPill = `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;background:${dc.bg};color:${dc.color};text-transform:uppercase;letter-spacing:.4px;white-space:nowrap">${esc(disc)}</span>`;
   return `<details style="background:${c.bg};border:1px solid ${c.border};border-radius:10px;margin-bottom:12px">
   <summary style="padding:14px 18px;cursor:pointer;list-style:none;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
     ${chip(v.impact)}
+    ${discPill}
     <code style="font-weight:700;font-size:13px;color:#0f172a">${esc(v.id)}</code>
     <span style="color:#334155;flex:1;min-width:180px;font-size:14px">${esc(v.help)}</span>
     ${sc ? `<span style="font-size:11px;color:#64748b;font-weight:600;white-space:nowrap">${sc}</span>` : ''}
@@ -463,8 +525,22 @@ function generateScanBody(audit, date, screenshotRelPath) {
     violationsBadge(sortedViolations, byImpact),
     sortedViolations.length > 0,
     sortedViolations.length
-      ? `<p style="font-size:13px;color:#64748b;margin:8px 0 14px">Click a row to expand details and see affected elements.</p>
-         ${sortedViolations.map(violationCard).join('\n')}`
+      ? (() => {
+          const grouped = {};
+          sortedViolations.forEach(v => { const d = getDiscipline(v); (grouped[d] = grouped[d] || []).push(v); });
+          return `<p style="font-size:13px;color:#64748b;margin:8px 0 16px">Click a row to expand details and see affected elements. Violations are grouped by design discipline.</p>
+            ${DISCIPLINE_ORDER.filter(d => grouped[d]).map(d => {
+              const vs = grouped[d].sort((a, b) => (SORT_ORDER[a.impact] ?? 9) - (SORT_ORDER[b.impact] ?? 9));
+              const dc = DISCIPLINE_COLORS[d];
+              return `<details open style="margin-bottom:16px">
+                <summary style="padding:7px 4px;cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;user-select:none;border-bottom:1px solid #f1f5f9;margin-bottom:10px">
+                  <span style="font-size:11px;font-weight:700;padding:3px 10px;border-radius:4px;background:${dc.bg};color:${dc.color};text-transform:uppercase;letter-spacing:.5px">${esc(d)}</span>
+                  <span style="font-size:12px;color:#94a3b8;font-weight:500">${vs.length} violation${vs.length !== 1 ? 's' : ''}</span>
+                </summary>
+                ${vs.map(v => violationCard(v)).join('\n')}
+              </details>`;
+            }).join('\n')}`;
+        })()
       : `<p style="color:#166334;font-size:14px;font-weight:600;padding:8px 0">No axe violations found &#10003;</p>`,
     sortedViolations.length === 0
   )}
