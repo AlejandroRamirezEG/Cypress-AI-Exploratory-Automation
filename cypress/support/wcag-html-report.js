@@ -436,6 +436,16 @@ function touchTargetBadge(smallTargets) {
   return warnBadge(smallTargets.length);
 }
 
+function typographyBadge(issues) {
+  if (!issues.length) return passBadge();
+  const fails = issues.filter(t => t.severity === 'fail').length;
+  if (fails > 0) {
+    const warns = issues.length - fails;
+    return `<span style="font-size:11px;font-weight:700;background:#fef2f2;color:#dc2626;padding:2px 9px;border-radius:10px;white-space:nowrap">${fails} fail${fails !== 1 ? 's' : ''}${warns ? ` · ${warns} warn` : ''}</span>`;
+  }
+  return warnBadge(issues.length);
+}
+
 function sectionDivider(label) {
   return `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#94a3b8;padding:16px 2px 8px">${esc(label)}</div>`;
 }
@@ -459,7 +469,7 @@ function sectionWrap(key, title, scRef, badge, isOpen, content, passing) {
 // ── single-scan body (no html/head/body wrapper) ──────────────────────────────
 
 function generateScanBody(audit, date, screenshotRelPath) {
-  const { summary: s = {}, violations = [], missingAlt = [], missingLabel = [], negativeFocus = [], positiveFocus = [], smallTargets = [], headingIssues = [] } = audit;
+  const { summary: s = {}, violations = [], missingAlt = [], missingLabel = [], negativeFocus = [], positiveFocus = [], smallTargets = [], headingIssues = [], typographyIssues = [] } = audit;
   const byImpact = s.byImpact || {};
   const lm = s.landmarks || {};
   const ec = s.elementCounts || {};
@@ -499,10 +509,11 @@ function generateScanBody(audit, date, screenshotRelPath) {
       ${scoreCard(byImpact.minor    || 0, 'Minor',     'axe WCAG Advisory', '#2563eb')}
     </div>
     <div style="display:flex;gap:12px;flex-wrap:wrap">
-      ${scoreCard(s.missingLabelCount || 0, 'Missing Labels', 'SC 1.3.1 / 4.1.2', '#7c3aed')}
-      ${scoreCard(s.missingAltCount   || 0, 'Missing Alt',    'SC 1.1.1',          '#0891b2')}
-      ${scoreCard(s.smallTargetCount  || 0, 'Small Targets',  'SC 2.5.8 / 44px',   '#f59e0b')}
-      ${scoreCard(s.headingIssueCount || 0, 'Heading Issues', 'SC 1.3.1 / 2.4.6',  '#8b5cf6')}
+      ${scoreCard(s.missingLabelCount    || 0, 'Missing Labels',  'SC 1.3.1 / 4.1.2', '#7c3aed')}
+      ${scoreCard(s.missingAltCount     || 0, 'Missing Alt',     'SC 1.1.1',          '#0891b2')}
+      ${scoreCard(s.smallTargetCount    || 0, 'Small Targets',   'SC 2.5.8 / 44px',   '#f59e0b')}
+      ${scoreCard(s.headingIssueCount   || 0, 'Heading Issues',  'SC 1.3.1 / 2.4.6',  '#8b5cf6')}
+      ${scoreCard(s.typographyIssueCount|| 0, 'Typography',      'SC 1.4.4 / size+wt', '#db2777')}
     </div>
   </div>
 
@@ -655,6 +666,40 @@ function generateScanBody(audit, date, screenshotRelPath) {
          </table>`
       : `<p style="color:#166334;font-size:14px;font-weight:600;padding:8px 0">No elements with positive <code>tabindex</code> found &#10003;</p>`,
     positiveFocus.length === 0
+  )}
+
+  ${sectionWrap(
+    'typography', 'Typography Issues', 'SC 1.4.4',
+    typographyBadge(typographyIssues),
+    typographyIssues.length > 0,
+    typographyIssues.length
+      ? `<p style="font-size:13px;color:#64748b;margin:8px 0 14px">
+           Text below 12 px is a hard failure. Text below 16 px with font-weight ≤ 300 is a warning — a common Ionic anti-pattern where thin weights disappear on low-contrast screens.
+         </p>
+         <table style="width:100%;border-collapse:collapse;font-size:13px">
+           <thead><tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0">
+             <th style="padding:8px 10px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">Element</th>
+             <th style="padding:8px 10px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">Text / Label</th>
+             <th style="padding:8px 10px;text-align:center;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">Size (px)</th>
+             <th style="padding:8px 10px;text-align:center;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">Weight</th>
+             <th style="padding:8px 10px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">Severity</th>
+           </tr></thead>
+           <tbody>${typographyIssues.map(el => {
+             const isFail = el.severity === 'fail';
+             const sevColor = isFail ? '#dc2626' : '#d97706';
+             const sevBg    = isFail ? '#fef2f2' : '#fffbeb';
+             const sevLabel = isFail ? 'Fail &lt;12px' : 'Warn thin+small';
+             return `<tr>
+               <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-family:monospace;font-size:12px">${esc(el.tag)}</td>
+               <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;color:#64748b;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(el.text)}</td>
+               <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;text-align:center;font-weight:700;color:${isFail ? '#dc2626' : '#d97706'}">${el.fontSize}</td>
+               <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;text-align:center;color:${el.fontWeight <= 300 ? '#d97706' : '#64748b'}">${el.fontWeight}</td>
+               <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9"><span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;background:${sevBg};color:${sevColor}">${sevLabel}</span></td>
+             </tr>`;
+           }).join('')}</tbody>
+         </table>`
+      : `<p style="color:#166334;font-size:14px;font-weight:600;padding:8px 0">No typography issues found &#10003;</p>`,
+    typographyIssues.length === 0
   )}
 
   ${sectionDivider('Structure')}

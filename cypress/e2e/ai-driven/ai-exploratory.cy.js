@@ -338,6 +338,35 @@ function runAudit(scanLabel) {
       })
       .filter(({ w, h }) => (w > 0 || h > 0) && (w < 44 || h < 44))
 
+    // Typography: flag tiny text (< 12 px, fail) and thin-weight small text
+    // (< 16 px at weight ≤ 300, warn) — common Ionic anti-pattern.
+    // Scoped to visible text-bearing elements; skips zero-size and hidden nodes.
+    const typographyIssues = (() => {
+      const dv = doc.defaultView
+      if (!dv) return []
+      return Array.from(doc.querySelectorAll(
+        'button, a[href], label, p, h1, h2, h3, h4, h5, h6, ion-button, ion-label'
+      ))
+        .map(el => {
+          const cs = dv.getComputedStyle(el)
+          if (cs.display === 'none' || cs.visibility === 'hidden') return null
+          const rect = el.getBoundingClientRect()
+          if (!rect.width || !rect.height) return null
+          const fontSize   = parseFloat(cs.fontSize)
+          const fontWeight = parseInt(cs.fontWeight, 10)
+          if (!fontSize) return null
+          const severity = fontSize < 12 ? 'fail'
+            : (fontSize < 16 && fontWeight <= 300) ? 'warn'
+            : null
+          if (!severity) return null
+          const text = (el.textContent || el.getAttribute('aria-label') || '')
+            .trim().replace(/\s+/g, ' ').slice(0, 60)
+          if (!text) return null
+          return { tag: el.tagName.toLowerCase(), text, fontSize: Math.round(fontSize * 10) / 10, fontWeight, severity }
+        })
+        .filter(Boolean)
+    })()
+
     const landmarks = {
       main: doc.querySelectorAll('main, [role="main"]').length,
       nav: doc.querySelectorAll('nav, [role="navigation"]').length,
@@ -370,12 +399,13 @@ function runAudit(scanLabel) {
       positiveFocusCount: positiveFocus.length,
       headingIssueCount: headingIssues.length,
       smallTargetCount: smallTargets.length,
+      typographyIssueCount: typographyIssues.length,
       landmarks,
       elementCounts: counts,
     }
 
     cy.log(`[wcag-audit] ${scanLabel} — ${violations.length} violations — ${JSON.stringify(summary.byImpact)}`)
-    cy.task('ai:log', { type: 'wcagAudit', summary, violations, missingAlt, missingLabel, negativeFocus, positiveFocus, smallTargets, headingIssues })
+    cy.task('ai:log', { type: 'wcagAudit', summary, violations, missingAlt, missingLabel, negativeFocus, positiveFocus, smallTargets, headingIssues, typographyIssues })
   })
 
   // Remove focus highlight style before screenshot so it doesn't appear in the report image.
