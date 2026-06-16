@@ -24,9 +24,125 @@ const CSS_TABS = `
   .panel.wrap{padding-top:28px}
 `;
 
-// Section open/closed state is stored in the browser's localStorage under
-// 'wcag-section-prefs'. Works for file:// reports opened directly — nothing
-// is written to disk, so there is nothing to gitignore.
+// ── settings panel ─────────────────────────────────────────────────────────────
+// Gear icon (⚙) opens this popover. Appears in the sticky tab bar for combined
+// reports and as a fixed button in the top-right for standalone reports.
+// Settings are stored in localStorage['wcag-settings'] — browser-side, no file.
+
+const HTML_SETTINGS_BTN_FIXED = `
+<button id="wcag-settings-btn" title="Report settings — press ? to toggle"
+  aria-label="Report settings"
+  style="position:fixed;top:10px;right:14px;z-index:200;background:#1e293b;color:#e2e8f0;
+         border:none;border-radius:10px;width:48px;height:48px;font-size:20px;cursor:pointer;
+         display:flex;align-items:center;justify-content:center;
+         box-shadow:0 2px 8px rgba(0,0,0,.25)">&#9881;</button>`;
+
+const HTML_SETTINGS_BTN_TABBAR = `<button id="wcag-settings-btn"
+  title="Report settings — press ? to toggle" aria-label="Report settings"
+  style="margin-left:auto;min-width:48px;min-height:44px;padding:0 14px;background:none;border:none;color:#64748b;
+         font-size:20px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
+         flex-shrink:0;border-bottom:3px solid transparent;margin-bottom:-2px">&#9881;</button>`;
+
+const HTML_SETTINGS_PANEL = `
+<div id="wcag-settings-panel" role="dialog" aria-label="Report settings" aria-modal="true"
+  style="display:none;position:fixed;top:54px;right:16px;z-index:9999;
+         background:#1e293b;color:#f8fafc;border-radius:12px;
+         box-shadow:0 8px 32px rgba(0,0,0,.4),0 0 0 1px rgba(255,255,255,.08);
+         width:284px;overflow:hidden;
+         font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
+
+  <div style="padding:13px 16px;border-bottom:1px solid rgba(255,255,255,.1);
+              display:flex;align-items:center;gap:8px">
+    <span style="font-size:15px" aria-hidden="true">&#9881;</span>
+    <span style="font-weight:700;font-size:14px">Report Settings</span>
+    <button id="wcag-settings-close" aria-label="Close settings"
+      style="margin-left:auto;background:none;border:none;color:#94a3b8;
+             font-size:18px;line-height:1;cursor:pointer;padding:2px 5px;border-radius:4px">&#10005;</button>
+  </div>
+
+  <div style="padding:16px 18px">
+
+    <div style="font-size:10px;font-weight:700;text-transform:uppercase;
+                letter-spacing:.8px;color:#64748b;margin-bottom:10px">Display</div>
+    <label style="display:flex;align-items:center;gap:10px;font-size:13px;
+                  cursor:pointer;padding:4px 0">
+      <input type="checkbox" id="wcag-hide-passing"
+        style="width:15px;height:15px;cursor:pointer;accent-color:#2563eb;flex-shrink:0">
+      <span>Hide passing sections</span>
+    </label>
+
+    <div style="font-size:11px;color:#94a3b8;margin-top:18px;padding-top:12px;
+                border-top:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:6px">
+      Press
+      <kbd style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);
+                  border-radius:4px;padding:1px 6px;font-size:11px;font-family:monospace">?</kbd>
+      to toggle &nbsp;·&nbsp;
+      <kbd style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);
+                  border-radius:4px;padding:1px 6px;font-size:11px;font-family:monospace">Esc</kbd>
+      to close
+    </div>
+
+  </div>
+</div>`;
+
+const JS_SETTINGS = `
+<script>
+(function(){
+  var SKEY='wcag-settings',settings={};
+  try{settings=JSON.parse(localStorage.getItem(SKEY)||'{}');}catch(e){}
+  function save(){try{localStorage.setItem(SKEY,JSON.stringify(settings));}catch(e){}}
+
+  function applyHidePassing(hide){
+    document.querySelectorAll('[data-wcag-pass]').forEach(function(el){
+      el.style.display=hide?'none':'';
+    });
+  }
+
+  function panel(){return document.getElementById('wcag-settings-panel');}
+  function isOpen(){var p=panel();return p&&p.style.display!=='none'&&p.style.display!=='';}
+  function openPanel(){var p=panel();if(p)p.style.display='block';}
+  function closePanel(){var p=panel();if(p)p.style.display='none';}
+  function togglePanel(){isOpen()?closePanel():openPanel();}
+
+  function init(){
+    var cb=document.getElementById('wcag-hide-passing');
+    if(cb){
+      cb.checked=!!settings.hidePassing;
+      applyHidePassing(cb.checked);
+      cb.addEventListener('change',function(){
+        settings.hidePassing=cb.checked;
+        save();
+        applyHidePassing(cb.checked);
+      });
+    }
+
+    var btn=document.getElementById('wcag-settings-btn');
+    if(btn)btn.addEventListener('click',function(e){e.stopPropagation();togglePanel();});
+
+    var cls=document.getElementById('wcag-settings-close');
+    if(cls)cls.addEventListener('click',closePanel);
+
+    document.addEventListener('click',function(e){
+      if(!isOpen())return;
+      var p=panel(),b=document.getElementById('wcag-settings-btn');
+      if(p&&!p.contains(e.target)&&(!b||!b.contains(e.target)))closePanel();
+    });
+
+    document.addEventListener('keydown',function(e){
+      if(e.key==='Escape'){closePanel();return;}
+      if(e.key==='?'&&!e.ctrlKey&&!e.metaKey&&!e.altKey){
+        var tag=(e.target||{}).tagName||'';
+        if(tag!=='INPUT'&&tag!=='TEXTAREA'){e.preventDefault();togglePanel();}
+      }
+    });
+  }
+
+  if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}else{init();}
+})();
+</script>`;
+
+// Settings state persists in localStorage['wcag-settings'].
+// Section collapse state persists separately in localStorage['wcag-section-prefs'].
 const JS_PREFS = `
 <script>
 (function(){
@@ -222,8 +338,11 @@ function sectionDivider(label) {
   return `<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#94a3b8;padding:16px 2px 8px">${esc(label)}</div>`;
 }
 
-function sectionWrap(key, title, scRef, badge, isOpen, content) {
-  return `<details data-wcag-section="${esc(key)}"${isOpen ? ' open' : ''} style="background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:14px;overflow:hidden">
+// passing=true adds data-wcag-pass attribute; the settings panel's "hide passing"
+// toggle uses [data-wcag-pass] to visually remove the element from the layout.
+// screenshot and inventory are neutral (neither pass nor fail) — omit passing.
+function sectionWrap(key, title, scRef, badge, isOpen, content, passing) {
+  return `<details data-wcag-section="${esc(key)}"${passing ? ' data-wcag-pass' : ''}${isOpen ? ' open' : ''} style="background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:14px;overflow:hidden">
   <summary style="padding:14px 20px;cursor:pointer;list-style:none;display:flex;align-items:center;gap:10px;flex-wrap:wrap;user-select:none">
     <span style="font-weight:700;font-size:15px;color:#0f172a;flex:1">${esc(title)}</span>
     ${scRef ? `<span style="font-size:11px;color:#94a3b8;font-weight:500;white-space:nowrap">${esc(scRef)}</span>` : ''}
@@ -306,7 +425,8 @@ function generateScanBody(audit, date, screenshotRelPath) {
     sortedViolations.length
       ? `<p style="font-size:13px;color:#64748b;margin:8px 0 14px">Click a row to expand details and see affected elements.</p>
          ${sortedViolations.map(violationCard).join('\n')}`
-      : `<p style="color:#166334;font-size:14px;font-weight:600;padding:8px 0">No axe violations found &#10003;</p>`
+      : `<p style="color:#166334;font-size:14px;font-weight:600;padding:8px 0">No axe violations found &#10003;</p>`,
+    sortedViolations.length === 0
   )}
 
   ${sectionWrap(
@@ -317,7 +437,8 @@ function generateScanBody(audit, date, screenshotRelPath) {
       Each input needs a visible <code>&lt;label for&gt;</code>, <code>aria-label</code>, or <code>aria-labelledby</code>.
       A <code>placeholder</code> alone does not count as a label.
     </p>
-    ${labelTable(missingLabel)}`
+    ${labelTable(missingLabel)}`,
+    missingLabel.length === 0
   )}
 
   ${sectionWrap(
@@ -336,7 +457,8 @@ function generateScanBody(audit, date, screenshotRelPath) {
              <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;color:#64748b">${esc(img.classes || '—')}</td>
            </tr>`).join('')}</tbody>
          </table>`
-      : `<p style="color:#166334;font-size:14px;font-weight:600;padding:8px 0">No images missing alt text &#10003;</p>`
+      : `<p style="color:#166334;font-size:14px;font-weight:600;padding:8px 0">No images missing alt text &#10003;</p>`,
+    missingAlt.length === 0
   )}
 
   ${sectionWrap(
@@ -368,7 +490,8 @@ function generateScanBody(audit, date, screenshotRelPath) {
            </tr>`;
            }).join('')}</tbody>
          </table>`
-      : `<p style="color:#166334;font-size:14px;font-weight:600;padding:8px 0">All interactive elements meet the 44×44 px target size &#10003;</p>`
+      : `<p style="color:#166334;font-size:14px;font-weight:600;padding:8px 0">All interactive elements meet the 44×44 px target size &#10003;</p>`,
+    smallTargets.length === 0
   )}
 
   ${sectionWrap(
@@ -389,7 +512,8 @@ function generateScanBody(audit, date, screenshotRelPath) {
              <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;color:#64748b">${esc(el.text || '—')}</td>
            </tr>`).join('')}</tbody>
          </table>`
-      : `<p style="color:#166334;font-size:14px;font-weight:600;padding:8px 0">No interactive elements found with <code>tabindex="-1"</code> &#10003;</p>`
+      : `<p style="color:#166334;font-size:14px;font-weight:600;padding:8px 0">No interactive elements found with <code>tabindex="-1"</code> &#10003;</p>`,
+    negativeFocus.length === 0
   )}
 
   ${sectionDivider('Structure')}
@@ -409,7 +533,8 @@ function generateScanBody(audit, date, screenshotRelPath) {
              <strong>${esc(issue.message)}</strong>${issue.text ? ` &mdash; <em style="color:#64748b">${esc(issue.text)}</em>` : ''}
            </li>`;
          }).join('')}</ol>`
-      : `<p style="color:#166334;font-size:14px;font-weight:600;padding:8px 0">Heading hierarchy is correct &#10003;</p>`
+      : `<p style="color:#166334;font-size:14px;font-weight:600;padding:8px 0">Heading hierarchy is correct &#10003;</p>`,
+    headingIssues.length === 0
   )}
 
   ${sectionWrap(
@@ -424,7 +549,8 @@ function generateScanBody(audit, date, screenshotRelPath) {
     </div>
     ${missingLandmarks.length ? `<p style="font-size:12px;color:#92400e;background:#fef3c7;border:1px solid #fde68a;padding:8px 12px;border-radius:6px;margin-top:12px">
       Missing <strong>${missingLandmarks.map(l => `&lt;${l}&gt;`).join(', ')}</strong> — screen reader users cannot jump directly to these regions.
-    </p>` : ''}`
+    </p>` : ''}`,
+    missingLandmarks.length === 0
   )}
 
   ${sectionDivider('Reference')}
@@ -466,7 +592,10 @@ function generateWcagHtml(audit, date, screenshotRelPath) {
 <div class="wrap">
 ${generateScanBody(audit, date, screenshotRelPath)}
 </div>
+${HTML_SETTINGS_BTN_FIXED}
+${HTML_SETTINGS_PANEL}
 ${JS_PREFS}
+${JS_SETTINGS}
 </body>
 </html>`;
 }
@@ -502,6 +631,7 @@ function generateCombinedWcagHtml(scans) {
 
 <div class="tab-bar">
   ${scans.map(tabBtn).join('\n  ')}
+  ${HTML_SETTINGS_BTN_TABBAR}
 </div>
 
 ${scans.map((scan, i) => `<div class="panel wrap" id="panel-${i}"${i > 0 ? ' hidden' : ''}>
@@ -515,7 +645,9 @@ ${generateScanBody(scan.audit, scan.date, scan.screenshotRelPath)}
     window.scrollTo(0, 0);
   }
 </script>
+${HTML_SETTINGS_PANEL}
 ${JS_PREFS}
+${JS_SETTINGS}
 
 </body>
 </html>`;
