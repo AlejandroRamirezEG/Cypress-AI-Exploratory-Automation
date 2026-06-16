@@ -100,14 +100,12 @@ const HTML_SETTINGS_PANEL = `
     </div>
 
     <div style="font-size:11px;color:#94a3b8;margin-top:14px;padding-top:12px;
-                border-top:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:6px">
-      Press
-      <kbd style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);
-                  border-radius:4px;padding:1px 6px;font-size:11px;font-family:monospace">?</kbd>
-      to toggle &nbsp;·&nbsp;
-      <kbd style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);
-                  border-radius:4px;padding:1px 6px;font-size:11px;font-family:monospace">Esc</kbd>
-      to close
+                border-top:1px solid rgba(255,255,255,.07);
+                display:grid;grid-template-columns:1fr 1fr;gap:6px 12px">
+      <span><kbd style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);border-radius:4px;padding:1px 6px;font-size:11px;font-family:monospace">?</kbd> settings</span>
+      <span><kbd style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);border-radius:4px;padding:1px 6px;font-size:11px;font-family:monospace">Esc</kbd> close</span>
+      <span><kbd style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);border-radius:4px;padding:1px 6px;font-size:11px;font-family:monospace">&lt;</kbd> collapse all</span>
+      <span><kbd style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);border-radius:4px;padding:1px 6px;font-size:11px;font-family:monospace">&gt;</kbd> expand all</span>
     </div>
 
   </div>
@@ -182,9 +180,15 @@ const JS_SETTINGS = `
 
     document.addEventListener('keydown',function(e){
       if(e.key==='Escape'){closePanel();return;}
+      var tag=(e.target||{}).tagName||'';
+      if(tag==='INPUT'||tag==='TEXTAREA')return;
       if(e.key==='?'&&!e.ctrlKey&&!e.metaKey&&!e.altKey){
-        var tag=(e.target||{}).tagName||'';
-        if(tag!=='INPUT'&&tag!=='TEXTAREA'){e.preventDefault();togglePanel();}
+        e.preventDefault();togglePanel();
+      }
+      if((e.key==='<'||e.key==='>')&&!e.ctrlKey&&!e.metaKey&&!e.altKey){
+        e.preventDefault();
+        var open=e.key==='>';
+        document.querySelectorAll('details[data-wcag-section]').forEach(function(d){d.open=open;});
       }
     });
   }
