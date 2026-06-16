@@ -49,8 +49,10 @@ module.exports = defineConfig({
       const SESSION_ID = makeSessionId();
       config.env.SESSION_ID = SESSION_ID;
 
+      // reports/ai-insights/  — parent folder shared by all sessions
+      const INSIGHTS_DIR = path.join(process.cwd(), 'reports', 'ai-insights');
       // reports/ai-insights/<SESSION_ID>/  — all report output for this session
-      const SESSION_REPORT_DIR = path.join(process.cwd(), 'reports', 'ai-insights', SESSION_ID);
+      const SESSION_REPORT_DIR = path.join(INSIGHTS_DIR, SESSION_ID);
       // Root of Cypress's screenshots folder — used as the search base for ai:moveScreenshot.
       // cypress run (headless) prepends the spec filename; cypress open does not.
       // We search the whole root by SESSION_ID+scanLabel so both modes work.
@@ -147,18 +149,33 @@ module.exports = defineConfig({
             const _d = new Date(), _p = n => String(n).padStart(2, '0');
             const date = `${_d.getFullYear()}-${_p(_d.getMonth()+1)}-${_p(_d.getDate())} ${_p(_d.getHours())}:${_p(_d.getMinutes())}:${_p(_d.getSeconds())}`;
 
-            const scans = audits.map(audit => {
+            const auditMeta = audits.map(audit => {
               const scanLabel = audit.summary && audit.summary.scanLabel;
               const screenshotFile = scanLabel && path.join(SESSION_REPORT_DIR, `${scanLabel}.png`);
-              const screenshotRelPath = screenshotFile && fs.existsSync(screenshotFile) ? `${scanLabel}.png` : null;
-              return { audit, date, screenshotRelPath };
+              const hasScreenshot = !!(screenshotFile && fs.existsSync(screenshotFile));
+              return { audit, scanLabel, hasScreenshot };
             });
+            const scans = auditMeta.map(({ audit, scanLabel, hasScreenshot }) => ({
+              audit, date,
+              screenshotRelPath: hasScreenshot ? `${scanLabel}.png` : null,
+            }));
 
             const html = generateCombinedWcagHtml(scans);
             if (!fs.existsSync(SESSION_REPORT_DIR)) fs.mkdirSync(SESSION_REPORT_DIR, { recursive: true });
             const outFile = path.join(SESSION_REPORT_DIR, 'wcag-report-combined.html');
             fs.writeFileSync(outFile, html);
-            return { path: outFile, scanCount: scans.length };
+
+            // Write latest.html as a full copy of the combined report, not a redirect.
+            // Screenshot paths are prefixed with SESSION_ID/ so they resolve from INSIGHTS_DIR.
+            // Bookmark this file once; refresh it after any scan to see the newest output.
+            const scansForLatest = auditMeta.map(({ audit, hasScreenshot, scanLabel }) => ({
+              audit, date,
+              screenshotRelPath: hasScreenshot ? `${SESSION_ID}/${scanLabel}.png` : null,
+            }));
+            const latestFile = path.join(INSIGHTS_DIR, 'latest.html');
+            fs.writeFileSync(latestFile, generateCombinedWcagHtml(scansForLatest));
+
+            return { path: outFile, latestPath: latestFile, scanCount: scans.length };
           } catch (err) {
             return { error: String(err) };
           }
