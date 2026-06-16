@@ -71,6 +71,22 @@ const HTML_SETTINGS_PANEL = `
       <span>Hide passing sections</span>
     </label>
 
+    <div style="font-size:10px;font-weight:700;text-transform:uppercase;
+                letter-spacing:.8px;color:#64748b;margin-top:18px;margin-bottom:10px">Text Size</div>
+    <div style="display:flex;gap:6px">
+      <button id="wcag-ts-small" style="flex:1;padding:5px 0;background:rgba(255,255,255,.08);
+                     border:1px solid rgba(255,255,255,.12);border-radius:6px;
+                     color:#f8fafc;font-size:12px;font-weight:600;cursor:pointer">S</button>
+      <button id="wcag-ts-medium" style="flex:1;padding:5px 0;background:#2563eb;border:1px solid #2563eb;
+                     border-radius:6px;color:#fff;font-size:12px;font-weight:600;cursor:pointer">M</button>
+      <button id="wcag-ts-large" style="flex:1;padding:5px 0;background:rgba(255,255,255,.08);
+                     border:1px solid rgba(255,255,255,.12);border-radius:6px;
+                     color:#f8fafc;font-size:12px;font-weight:600;cursor:pointer">L</button>
+      <button id="wcag-ts-xl" style="flex:1;padding:5px 0;background:rgba(255,255,255,.08);
+                     border:1px solid rgba(255,255,255,.12);border-radius:6px;
+                     color:#f8fafc;font-size:12px;font-weight:600;cursor:pointer">XL</button>
+    </div>
+
     <div style="font-size:11px;color:#94a3b8;margin-top:18px;padding-top:12px;
                 border-top:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:6px">
       Press
@@ -98,6 +114,19 @@ const JS_SETTINGS = `
     });
   }
 
+  var TEXT_SIZES={small:'0.8',medium:'1',large:'1.3',xl:'1.7'};
+  function applyTextSize(size){
+    document.documentElement.style.zoom=TEXT_SIZES[size]||'1';
+    ['small','medium','large','xl'].forEach(function(s){
+      var b=document.getElementById('wcag-ts-'+s);
+      if(!b)return;
+      var active=s===size;
+      b.style.background=active?'#2563eb':'rgba(255,255,255,.08)';
+      b.style.borderColor=active?'#2563eb':'rgba(255,255,255,.12)';
+      b.style.color=active?'#fff':'#f8fafc';
+    });
+  }
+
   function panel(){return document.getElementById('wcag-settings-panel');}
   function isOpen(){var p=panel();return p&&p.style.display!=='none'&&p.style.display!=='';}
   function openPanel(){var p=panel();if(p)p.style.display='block';}
@@ -115,6 +144,17 @@ const JS_SETTINGS = `
         applyHidePassing(cb.checked);
       });
     }
+
+    var currentSize=settings.textSize||'medium';
+    applyTextSize(currentSize);
+    ['small','medium','large','xl'].forEach(function(s){
+      var b=document.getElementById('wcag-ts-'+s);
+      if(b)b.addEventListener('click',function(){
+        settings.textSize=s;
+        save();
+        applyTextSize(s);
+      });
+    });
 
     var btn=document.getElementById('wcag-settings-btn');
     if(btn)btn.addEventListener('click',function(e){e.stopPropagation();togglePanel();});
