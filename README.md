@@ -15,7 +15,9 @@ This project audits Angular/Ionic sign-up and onboarding flows for accessibility
 | Mode | Command | When to use |
 |------|---------|-------------|
 | **Automated** | `pnpm test:ai` | CI, quick baseline scan, pre-merge checks |
+| **Automated + boxes** | `pnpm test:ai_boxes` | Same as above with violation bounding boxes annotated in the screenshot |
 | **Interactive** | `pnpm test:ai_interactive` | Design reviews, multi-state walkthroughs, WCAG audits across page transitions |
+| **Interactive + boxes** | `pnpm test:ai_interactive_boxes` | Interactive session with violation bounding boxes enabled |
 
 Both modes produce the same output — self-contained HTML reports, a JSON data file, and viewport screenshots — grouped into a session folder so results never overwrite each other.
 
@@ -70,15 +72,13 @@ No interaction required. Suitable for CI pipelines.
 
 Opens the Cypress App and injects a control bar into the page under test.
 
-<!-- TODO: Add screenshot of the interactive control bar (top of page, scan/done buttons) -->
-![Interactive bar](docs/screenshots/interactive-bar.png)
-
 The bar provides:
 
 | Control | Action |
 |---------|--------|
-| **Scan** | Runs the WCAG audit against the current page state and saves a report, then loops back for the next scan |
-| **Done** | Ends the session cleanly; all completed reports remain on disk |
+| **🔍 Scan** | Runs the WCAG audit against the current page state and saves a report, then loops back for the next scan |
+| **✓ Done** | Ends the session cleanly; all completed reports remain on disk |
+| **👁 Focus** | Toggles a bright pink `:focus` outline on all AUT elements so you can walk the tab order visually without running a scan. The bar turns amber and shows a warning if focus escapes to the Cypress runner; click anywhere on the page to restore it. The outline is automatically stripped before each screenshot so it never appears in report images. |
 | **↑ / ↓** | Moves the bar between the top and bottom of the viewport |
 | **✕** | Collapses the bar to a small pill in the bottom-right corner; click the pill to restore it |
 
@@ -92,34 +92,49 @@ All output for a session is grouped under a session folder named `YYYYMMDD-HHmm-
 
 ```
 reports/ai-insights/
-└── 20260612-1430-a3f9/       ← session folder
-    ├── report.json            ← full audit data for all scans
-    ├── scan-1.png             ← viewport screenshot
+├── latest.html                      ← always points to the most recent session (bookmark this)
+└── 20260612-1430-a3f9/              ← session folder
+    ├── report.json                  ← full audit data for all scans
+    ├── scan-1.png                   ← viewport screenshot (annotated if _boxes mode)
     ├── wcag-report-scan-1.html
     ├── scan-2.png
     ├── wcag-report-scan-2.html
-    └── wcag-report-combined.html   ← tabbed view of all scans
+    └── wcag-report-combined.html    ← tabbed view of all scans
 ```
+
+`latest.html` is a full copy of the most recent session's combined report, overwritten after every scan. Bookmark it once — refresh after any run to see the newest output without navigating to the session folder.
 
 ### AI-Scan HTML report (`wcag-report-combined.html`)
 
-Self-contained, no external dependencies. Includes:
+Self-contained, no external dependencies, all CSS inlined. Includes:
 
-- Summary header: URL, page title, scan mode, violation counts by impact level
-- Score cards: critical / serious / moderate / minor violations
-- Landmark coverage: `<main>`, `<nav>`, `<header>`, `<footer>` presence
-- Axe-core violation cards with affected node snippets and WCAG success criteria
-- Missing `alt` text inventory
-- Unlabelled form field inventory
-- Negative `tabindex` on interactive elements
-- Element count inventory (inputs, buttons, links, images, etc.)
-- Viewport screenshot (inline, colocated with the HTML file)
-- **TABBED VIEW:** See multiple scans in one report (individual scans in `wcag-report-scan-X.html`)
+**Score cards**
+- axe-core violations by severity: critical / serious / moderate / minor
+- Heuristic counts: missing labels, missing alt, small touch targets, heading issues
 
-Tabbed view of all scans in the session. Each tab shows the scan number and a violation badge (green "clean" or red count). Regenerated after every scan so it always reflects the latest session state.
+**Findings (collapsible sections)**
+- Viewport screenshot (annotated with violation bounding boxes when `_boxes` mode is on)
+- Axe-core violations — grouped by designer discipline (Visual / Interaction / Form / Structure) with impact-colored chips, discipline pills, and WCAG SC references
+- Inputs missing accessible label
+- Images missing alt text
+- Small touch targets (< 44 × 44 px)
+- Interactive elements with `tabindex="-1"` (removed from tab order)
+- Elements with positive `tabindex` values (override natural tab order)
 
-<!-- TODO: Add screenshot of wcag-report-combined.html with multiple scan tabs visible -->
-<img src="docs/screenshots/wcag-report-combined.png" width="800"/>
+**Structure**
+- Heading hierarchy (missing `h1`, multiple `h1`s, level skips)
+- Landmark coverage (`<main>`, `<nav>`, `<header>`, `<footer>`)
+
+**Reference**
+- Element inventory (inputs, buttons, links, images, etc.)
+
+**Report settings (⚙ gear button)**
+- *Hide passing* — removes passing sections from the layout to focus on failures
+- *Text size* — S / M / L / XL whole-page zoom
+
+Section collapse state and settings persist in `localStorage` so the layout survives page refreshes.
+
+**Combined view:** tabs across all scans in the session with violation badges. Each tab label is derived from the page's `<h1>` / `ion-title` / URL path. Regenerated after every scan.
 
 ### `report.json`
 
@@ -141,10 +156,15 @@ Each scan runs axe-core against the following rule sets:
 
 In addition, the spec runs its own heuristic checks independently of axe:
 
-- Images missing `alt` text
-- Form inputs with no associated `<label>`, `aria-label`, or `aria-labelledby`
-- Interactive elements (`<a>`, `<button>`, `<input>`, etc.) with `tabindex="-1"`
-- Landmark region presence (`main`, `nav`, `header`, `footer`)
+| Heuristic | Standard |
+|-----------|----------|
+| Images missing `alt` text | SC 1.1.1 |
+| Form inputs with no `<label>`, `aria-label`, or `aria-labelledby` | SC 1.3.1 / 4.1.2 |
+| Interactive elements with `tabindex="-1"` (removed from tab order) | SC 2.1.1 |
+| Elements with positive `tabindex` values (override natural tab order) | SC 1.3.2 / 2.4.3 |
+| Touch targets below 44 × 44 px (warn) or 24 × 24 px (fail) | SC 2.5.8 |
+| Heading hierarchy: missing `h1`, multiple `h1`s, level skips | SC 1.3.1 / 2.4.6 |
+| Landmark region presence (`main`, `nav`, `header`, `footer`) | SC 1.3.6 / 2.4.1 |
 
 ---
 
@@ -191,6 +211,7 @@ Set via `cypress.env.json` (local) or `--env` flag (CLI):
 |----------|---------|-------------|
 | `BASE_URL` | `https://www.saucedemo.com` | Page to audit |
 | `WCAG_INTERACTIVE` | `false` | Set `true` to enable interactive mode |
+| `WCAG_HIGHLIGHT_BOXES` | `false` | Set `true` to annotate the screenshot with impact-colored bounding boxes and rule-ID labels over each violation node. Use the `_boxes` scripts as a one-shot alternative. |
 | `WCAG_SCAN_TIMEOUT` | `600000` | Milliseconds to wait for a button click before timing out (interactive mode) |
 | `SESSION_ID` | _(generated)_ | Set automatically by `setupNodeEvents`; do not override manually |
 
@@ -217,7 +238,7 @@ Defined in `cypress.config.js`, called via `cy.task()` from the spec:
 | `ai:save` | Writes `report.json` to the session report directory |
 | `ai:moveScreenshot` | Moves the screenshot from Cypress's staging area into the session report directory |
 | `ai:saveHtml` | Generates a per-scan HTML report |
-| `ai:saveCombinedHtml` | Regenerates the tabbed combined report from all scans so far |
+| `ai:saveCombinedHtml` | Regenerates the tabbed combined report from all scans so far; also overwrites `reports/ai-insights/latest.html` |
 | `ai:checkLink` | Node-side HEAD request for a single URL |
 | `ai:checkLinks` | Parallel HEAD requests for a batch of URLs |
 
@@ -226,8 +247,10 @@ Defined in `cypress.config.js`, called via `cy.task()` from the spec:
 ## Commands
 
 ```bash
-pnpm test:ai              # Headless automated scan
-pnpm test:ai_interactive  # Interactive Cypress App session
-pnpm cy:open              # Open Cypress App (no WCAG env set)
-pnpm cy:run               # Full headless suite
+pnpm test:ai                    # Headless automated scan
+pnpm test:ai_boxes              # Headless scan with violation bounding boxes in screenshot
+pnpm test:ai_interactive        # Interactive Cypress App session
+pnpm test:ai_interactive_boxes  # Interactive session with violation bounding boxes enabled
+pnpm cy:open                    # Open Cypress App (no WCAG env set)
+pnpm cy:run                     # Full headless suite
 ```
