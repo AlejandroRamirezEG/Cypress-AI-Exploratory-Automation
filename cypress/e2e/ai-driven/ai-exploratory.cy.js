@@ -90,7 +90,8 @@ function injectScanControls(win, scanIndex) {
   scanBtn.addEventListener('click', () => { bar.remove(); win.__wcag_action__ = 'scan' })
 
   const doneBtn = doc.createElement('button')
-  doneBtn.textContent = '✓ Done'
+  doneBtn.textContent = '✕'
+  doneBtn.title = 'End session (all completed reports are saved)'
   doneBtn.setAttribute('style', GHOST)
   doneBtn.addEventListener('click', () => { bar.remove(); win.__wcag_action__ = 'done' })
 
@@ -154,10 +155,10 @@ function injectScanControls(win, scanIndex) {
     syncMoveBtn()
   })
 
-  // ✕ — hide bar, show a small restore pill in the corner
+  // ⎯ — minimize bar to a pill; Done is placed after this so it sits at the far right
   const hideBtn = doc.createElement('button')
-  hideBtn.textContent = '✕'
-  hideBtn.title = 'Hide (click the restore button to bring bar back)'
+  hideBtn.textContent = '⎯'
+  hideBtn.title = 'Minimize (click the restore button to bring bar back)'
   hideBtn.setAttribute('style', GHOST)
   hideBtn.addEventListener('click', () => {
     bar.remove()
@@ -179,10 +180,10 @@ function injectScanControls(win, scanIndex) {
 
   bar.appendChild(msg)
   bar.appendChild(scanBtn)
-  bar.appendChild(doneBtn)
   bar.appendChild(focusBtn)
   bar.appendChild(moveBtn)
   bar.appendChild(hideBtn)
+  bar.appendChild(doneBtn)
   doc.body.appendChild(bar)
 }
 

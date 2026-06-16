@@ -79,12 +79,12 @@ The bar provides:
 | Control | Action |
 |---------|--------|
 | **🔍 Scan** | Runs the WCAG audit against the current page state and saves a report, then loops back for the next scan |
-| **✓ Done** | Ends the session cleanly; all completed reports remain on disk |
 | **👁 Focus** | Toggles a bright pink `:focus` outline on all AUT elements so you can walk the tab order visually without running a scan. The bar turns amber and shows a warning if focus escapes to the Cypress runner; click anywhere on the page to restore it. The outline is automatically stripped before each screenshot so it never appears in report images. ![Focus on page element with control bar](docs/screenshots/focus-on-page.png) |
 | **↑ / ↓** | Moves the bar between the top and bottom of the viewport |
-| **✕** | Collapses the bar to a small pill in the bottom-right corner; click the pill to restore it |
+| **⎯** | Minimizes the bar to a small pill in the bottom-right corner; click the pill to restore it |
+| **✕** | Ends the session cleanly; all completed reports remain on disk |
 
-Navigate the app between scans — each scan captures whatever page state is currently visible. There is no preset scan limit; click **Done** when finished.
+Navigate the app between scans — each scan captures whatever page state is currently visible. There is no preset scan limit; click **✕** when finished.
 
 ---
 
