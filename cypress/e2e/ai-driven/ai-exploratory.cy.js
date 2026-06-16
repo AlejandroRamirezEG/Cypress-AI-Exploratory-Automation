@@ -28,11 +28,20 @@ const SCAN_WAIT_MS = parseInt(Cypress.env('WCAG_SCAN_TIMEOUT') || String(10 * 60
 // Injected by setupNodeEvents at Cypress launch — groups all output for this session.
 const SESSION_ID = Cypress.env('SESSION_ID') || 'no-session'
 
+const HIGHLIGHT_BOXES = !!Cypress.env('WCAG_HIGHLIGHT_BOXES')
+
 const IMPACT_LABEL = {
   critical: 'WCAG Failure — Critical',
   serious: 'WCAG Failure — Serious',
   moderate: 'WCAG Warning — Moderate',
   minor: 'WCAG Advisory — Minor',
+}
+
+const HIGHLIGHT_COLORS = {
+  critical: '#dc2626',
+  serious:  '#ea580c',
+  moderate: '#d97706',
+  minor:    '#2563eb',
 }
 
 // ── interactive controls (injected into the AUT, not the Cypress runner) ─────
@@ -322,12 +331,59 @@ function runAudit(scanLabel) {
     cy.task('ai:log', { type: 'wcagAudit', summary, violations, missingAlt, missingLabel, negativeFocus, positiveFocus, smallTargets, headingIssues })
   })
 
+  // Inject violation highlight overlays when WCAG_HIGHLIGHT_BOXES=true.
+  // Overlays use position:fixed so they stay viewport-aligned at screenshot time.
+  // Each overlay carries a rule-ID label so designers can read violations directly
+  // from the screenshot without cross-referencing selectors.
+  // Cleaned up immediately after screenshot — never visible to the tester live.
+  if (HIGHLIGHT_BOXES) {
+    cy.document().then(doc => {
+      const seen = new Set()
+      violations.forEach(v => {
+        const color = HIGHLIGHT_COLORS[v.impact] || '#dc2626';
+        (v.nodes || []).forEach(n => {
+          const sel = Array.isArray(n.target) && n.target.length
+            ? (typeof n.target[n.target.length - 1] === 'string' ? n.target[n.target.length - 1] : null)
+            : null
+          if (!sel || seen.has(sel)) return
+          seen.add(sel)
+          try {
+            const el = doc.querySelector(sel)
+            if (!el) return
+            const rect = el.getBoundingClientRect()
+            if (!rect.width && !rect.height) return
+            const ov = doc.createElement('div')
+            ov.setAttribute('data-wcag-highlight', '')
+            ov.setAttribute('style', [
+              'position:fixed',
+              `top:${rect.top}px`, `left:${rect.left}px`,
+              `width:${rect.width}px`, `height:${rect.height}px`,
+              `border:3px solid ${color}`,
+              'z-index:2147483646', 'pointer-events:none', 'box-sizing:border-box',
+            ].join(';'))
+            const lbl = doc.createElement('span')
+            lbl.setAttribute('style', `position:absolute;top:0;left:0;background:${color};color:#fff;font:700 9px/1.4 system-ui,sans-serif;padding:1px 4px;white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis`)
+            lbl.textContent = v.id
+            ov.appendChild(lbl)
+            doc.body.appendChild(ov)
+          } catch (_) {}
+        })
+      })
+    })
+  }
+
   // Screenshot lives under the session subfolder so it's co-located with its reports.
   // Filename is just the scanLabel (e.g. scan-1.png) — the session folder provides context.
   cy.screenshot(`ai-analysis/${SESSION_ID}/${scanLabel}`, { capture: 'viewport' }).then(
     () => cy.task('ai:log', { type: 'step', step: 'screenshot', details: { name: scanLabel } }),
     (err) => cy.task('ai:log', { type: 'error', message: 'screenshotFailed', detail: String(err) })
   )
+
+  if (HIGHLIGHT_BOXES) {
+    cy.document().then(doc => {
+      doc.querySelectorAll('[data-wcag-highlight]').forEach(el => el.remove())
+    })
+  }
 
   // Move screenshot from cypress/screenshots/…/<SESSION_ID>/ into the session report
   // directory so all session output (JSON, HTML, PNG) is colocated in one folder.
