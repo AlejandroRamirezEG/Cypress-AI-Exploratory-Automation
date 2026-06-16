@@ -94,6 +94,51 @@ function injectScanControls(win, scanIndex) {
   doneBtn.setAttribute('style', GHOST)
   doneBtn.addEventListener('click', () => { bar.remove(); win.__wcag_action__ = 'done' })
 
+  // 👁 — toggle a bright :focus outline injected into the AUT so the designer
+  // can walk the tab order visually without running a scan.
+  // State is derived from the DOM so it survives bar re-injection between cycles.
+  let focusActive = !!doc.getElementById('__wcag_focus_style__')
+  const focusBtn = doc.createElement('button')
+  const FOCUS_ON_MSG  = '👁 Focus active — Tab through the page.'
+  const FOCUS_OUT_MSG = '⚠ Focus left the page — click anywhere on the page to restore it.'
+  function syncFocusBtn() {
+    focusBtn.textContent = '👁 Focus'
+    focusBtn.title = focusActive ? 'Disable focus highlight' : 'Enable focus highlight (tab through the page)'
+    focusBtn.setAttribute('style', focusActive
+      ? `${SOLID};background:#7c3aed;color:#fff`
+      : GHOST)
+  }
+  syncFocusBtn()
+  const normalMsg = msg.textContent
+  if (focusActive) msg.textContent = FOCUS_ON_MSG
+
+  // window blur/focus tell us when the tester tabs out of the AUT into the
+  // Cypress runner — show a contextual nudge only at that moment.
+  const onWinBlur  = () => { if (!focusActive) return; msg.textContent = FOCUS_OUT_MSG; bar.style.background = '#b45309' }
+  const onWinFocus = () => { if (!focusActive) return; msg.textContent = FOCUS_ON_MSG;  applyBarStyle() }
+  if (focusActive) { win.addEventListener('blur', onWinBlur); win.addEventListener('focus', onWinFocus) }
+
+  focusBtn.addEventListener('click', () => {
+    focusActive = !focusActive
+    const existing = doc.getElementById('__wcag_focus_style__')
+    if (focusActive && !existing) {
+      const style = doc.createElement('style')
+      style.id = '__wcag_focus_style__'
+      // Exclude the control bar and pill — they are audit tools, not part of the AUT.
+      style.textContent = '*:focus:not(#__wcag_controls__ *):not(#__wcag_controls__):not(#__wcag_pill__){outline:4px solid #ff007f !important;outline-offset:3px !important}'
+      doc.head.appendChild(style)
+      msg.textContent = FOCUS_ON_MSG
+      win.addEventListener('blur', onWinBlur)
+      win.addEventListener('focus', onWinFocus)
+    } else if (!focusActive && existing) {
+      existing.remove()
+      msg.textContent = normalMsg
+      win.removeEventListener('blur', onWinBlur)
+      win.removeEventListener('focus', onWinFocus)
+    }
+    syncFocusBtn()
+  })
+
   // ↑ / ↓ — move bar to opposite edge
   const moveBtn = doc.createElement('button')
   moveBtn.setAttribute('style', GHOST)
@@ -135,6 +180,7 @@ function injectScanControls(win, scanIndex) {
   bar.appendChild(msg)
   bar.appendChild(scanBtn)
   bar.appendChild(doneBtn)
+  bar.appendChild(focusBtn)
   bar.appendChild(moveBtn)
   bar.appendChild(hideBtn)
   doc.body.appendChild(bar)
@@ -329,6 +375,12 @@ function runAudit(scanLabel) {
 
     cy.log(`[wcag-audit] ${scanLabel} — ${violations.length} violations — ${JSON.stringify(summary.byImpact)}`)
     cy.task('ai:log', { type: 'wcagAudit', summary, violations, missingAlt, missingLabel, negativeFocus, positiveFocus, smallTargets, headingIssues })
+  })
+
+  // Remove focus highlight style before screenshot so it doesn't appear in the report image.
+  cy.document().then(doc => {
+    const fs = doc.getElementById('__wcag_focus_style__')
+    if (fs) fs.remove()
   })
 
   // Inject violation highlight overlays when WCAG_HIGHLIGHT_BOXES=true.
