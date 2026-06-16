@@ -243,6 +243,14 @@ function runAudit(scanLabel) {
         text: (el.textContent || '').trim().slice(0, 80),
       }))
 
+    const positiveFocus = Array.from(doc.querySelectorAll('[tabindex]'))
+      .filter(el => parseInt(el.getAttribute('tabindex'), 10) > 0)
+      .map(el => ({
+        tag: el.tagName.toLowerCase(),
+        tabindex: parseInt(el.getAttribute('tabindex'), 10),
+        text: (el.textContent || el.getAttribute('aria-label') || '').trim().slice(0, 80),
+      }))
+
     const headingIssues = (() => {
       const headings = Array.from(doc.querySelectorAll('h1,h2,h3,h4,h5,h6')).map(el => ({
         level: parseInt(el.tagName[1], 10),
@@ -303,6 +311,7 @@ function runAudit(scanLabel) {
       missingAltCount: missingAlt.length,
       missingLabelCount: missingLabel.length,
       negativeFocusCount: negativeFocus.length,
+      positiveFocusCount: positiveFocus.length,
       headingIssueCount: headingIssues.length,
       smallTargetCount: smallTargets.length,
       landmarks,
@@ -310,7 +319,7 @@ function runAudit(scanLabel) {
     }
 
     cy.log(`[wcag-audit] ${scanLabel} — ${violations.length} violations — ${JSON.stringify(summary.byImpact)}`)
-    cy.task('ai:log', { type: 'wcagAudit', summary, violations, missingAlt, missingLabel, negativeFocus, smallTargets, headingIssues })
+    cy.task('ai:log', { type: 'wcagAudit', summary, violations, missingAlt, missingLabel, negativeFocus, positiveFocus, smallTargets, headingIssues })
   })
 
   // Screenshot lives under the session subfolder so it's co-located with its reports.

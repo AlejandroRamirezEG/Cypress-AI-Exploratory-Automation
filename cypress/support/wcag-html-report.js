@@ -397,7 +397,7 @@ function sectionWrap(key, title, scRef, badge, isOpen, content, passing) {
 // ── single-scan body (no html/head/body wrapper) ──────────────────────────────
 
 function generateScanBody(audit, date, screenshotRelPath) {
-  const { summary: s = {}, violations = [], missingAlt = [], missingLabel = [], negativeFocus = [], smallTargets = [], headingIssues = [] } = audit;
+  const { summary: s = {}, violations = [], missingAlt = [], missingLabel = [], negativeFocus = [], positiveFocus = [], smallTargets = [], headingIssues = [] } = audit;
   const byImpact = s.byImpact || {};
   const lm = s.landmarks || {};
   const ec = s.elementCounts || {};
@@ -554,6 +554,31 @@ function generateScanBody(audit, date, screenshotRelPath) {
          </table>`
       : `<p style="color:#166334;font-size:14px;font-weight:600;padding:8px 0">No interactive elements found with <code>tabindex="-1"</code> &#10003;</p>`,
     negativeFocus.length === 0
+  )}
+
+  ${sectionWrap(
+    'positive-tabindex', 'Elements With Positive tabindex', 'SC 1.3.2 / 2.4.3',
+    issueBadge(positiveFocus.length),
+    positiveFocus.length > 0,
+    positiveFocus.length
+      ? `<p style="font-size:13px;color:#64748b;margin:8px 0 14px">
+           Positive <code>tabindex</code> values override the natural DOM tab order and almost always indicate a focus-management bug.
+           Remove the positive values and re-order elements in the DOM instead.
+         </p>
+         <table style="width:100%;border-collapse:collapse;font-size:13px">
+           <thead><tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0">
+             <th style="padding:8px 10px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase">Element</th>
+             <th style="padding:8px 10px;text-align:center;font-size:11px;color:#64748b;text-transform:uppercase">tabindex</th>
+             <th style="padding:8px 10px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase">Text / Label</th>
+           </tr></thead>
+           <tbody>${positiveFocus.map(el => `<tr>
+             <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-family:monospace;font-size:12px">${esc(el.tag)}</td>
+             <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;text-align:center;font-weight:700;color:#dc2626">${esc(el.tabindex)}</td>
+             <td style="padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;color:#64748b">${esc(el.text || '—')}</td>
+           </tr>`).join('')}</tbody>
+         </table>`
+      : `<p style="color:#166334;font-size:14px;font-weight:600;padding:8px 0">No elements with positive <code>tabindex</code> found &#10003;</p>`,
+    positiveFocus.length === 0
   )}
 
   ${sectionDivider('Structure')}
