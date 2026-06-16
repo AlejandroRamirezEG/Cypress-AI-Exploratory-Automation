@@ -649,8 +649,6 @@ function generateScanBody(audit, date, screenshotRelPath) {
   </div>
 
   <div data-wcag-sections>
-  ${sectionDivider('Findings')}
-
   ${screenshotRelPath ? sectionWrap(
     'screenshot', 'Page Screenshot', null,
     `<span style="font-size:11px;font-weight:400;font-family:monospace;color:#94a3b8;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block">${esc(screenshotRelPath)}</span>`,
@@ -834,8 +832,6 @@ function generateScanBody(audit, date, screenshotRelPath) {
     typographyIssues.length === 0
   )}
 
-  ${sectionDivider('Structure')}
-
   ${sectionWrap(
     'structure', 'Document Structure', 'SC 1.3.1 / 2.4.6',
     issueBadge(headingIssues.length),
@@ -870,8 +866,6 @@ function generateScanBody(audit, date, screenshotRelPath) {
     </p>` : ''}`,
     missingLandmarks.length === 0
   )}
-
-  ${sectionDivider('Reference')}
 
   ${sectionWrap(
     'inventory', 'Element Inventory', null,
