@@ -5,11 +5,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-pnpm install                  # install dependencies
-pnpm test:ai                  # headless automated scan (CI / quick baseline)
-pnpm test:ai_interactive      # interactive Cypress App session (designer walkthrough)
-pnpm cy:open                  # open Cypress App without WCAG env set
-pnpm cy:run                   # full headless suite (all specs)
+pnpm install                       # install dependencies
+pnpm test:ai                       # headless automated scan (CI / quick baseline)
+pnpm test:ai_boxes                 # headless scan with violation bounding boxes in screenshot
+pnpm test:ai_interactive           # interactive Cypress App session (designer walkthrough)
+pnpm test:ai_interactive_boxes     # interactive session with violation bounding boxes enabled
+pnpm cy:open                       # open Cypress App without WCAG env set
+pnpm cy:run                        # full headless suite (all specs)
 ```
 
 Target URL is set via `cypress.env.json` (gitignored, create locally):
@@ -17,6 +19,9 @@ Target URL is set via `cypress.env.json` (gitignored, create locally):
 { "BASE_URL": "https://your-staging-url.example.com" }
 ```
 Without this file, runs default to `https://www.saucedemo.com`.
+
+Optional flags (add to `cypress.env.json` or pass via `--env`):
+- `WCAG_HIGHLIGHT_BOXES: true` — inject impact-colored bounding boxes + rule-ID labels over each violating element before `cy.screenshot()`, then remove them. Off by default; the `_boxes` scripts above enable it for one run.
 
 ## Architecture
 
@@ -32,6 +37,8 @@ The project is a two-mode WCAG 2.1 AA auditor built on Cypress + axe-core. The p
 
 **Interactive** (`pnpm test:ai_interactive`): visits `BASE_URL`, then injects a fixed control bar into the AUT (application under test). The tester navigates the app and clicks **Scan** to audit whatever is on screen, repeating as many times as needed before clicking **Done**. The loop is implemented as a recursive `doScanCycle()` function — each cycle queues its own Cypress commands and calls itself only when the user clicks Scan. The bar communicates clicks back to Cypress via `win.__wcag_action__` (a property set on the AUT's `window`). The bar's top/bottom position is persisted across cycles via a module-level `_barPosition` variable.
 
+Control bar buttons (left to right): **Scan**, **Done**, **👁 Focus**, **↑/↓** (move), **✕** (hide to pill). The **👁 Focus** toggle injects `<style id="__wcag_focus_style__">` into the AUT (`*:focus` outline 4px #ff007f, excluding `#__wcag_controls__` and `#__wcag_pill__`) so the designer can walk the tab order visually between scans. Active state is read from the DOM on bar re-injection so it survives across scan cycles. When focus escapes the AUT (`window.blur`), the bar turns amber (`#b45309`) and the message warns the tester; `window.focus` restores both. Do not add new `win.__wcag_action__` values — extend the bar with toggles that only mutate DOM/styles.
+
 ### Session isolation
 
 `cypress.config.js:setupNodeEvents` generates a unique `SESSION_ID` (`YYYYMMDD-HHmm-xxxx`) once per Cypress launch and injects it into `config.env`. Every scan within a session writes to `reports/ai-insights/<SESSION_ID>/`. This means parallel runs never overwrite each other and an early Cypress exit still leaves valid output for all completed scans.
@@ -40,9 +47,10 @@ The project is a two-mode WCAG 2.1 AA auditor built on Cypress + axe-core. The p
 
 1. `cy.injectAxe()` — re-injected each scan because Angular may re-bootstrap between scans.
 2. `cy.checkA11y()` — called with `true` as the 4th arg so violations are collected but **do not fail the test**.
-3. `cy.document()` — heuristic checks run directly in the browser: missing `alt`, unlabelled inputs, `tabindex="-1"` on interactive elements, touch target sizes (SC 2.5.8), heading hierarchy (SC 1.3.1 / 2.4.6), landmark presence.
-4. `cy.screenshot()` — saved to `cypress/screenshots/ai-analysis/<SESSION_ID>/<scanLabel>.png` (Cypress headless prepends the spec filename; this is handled by the `ai:moveScreenshot` task).
-5. Node tasks — `ai:moveScreenshot` → `ai:save` (JSON) → `ai:saveHtml` (per-scan HTML) → `ai:saveCombinedHtml` (regenerated tabbed report + overwrites `latest.html`).
+3. `cy.document()` — heuristic checks run directly in the browser: missing `alt`, unlabelled inputs, `tabindex="-1"` on interactive elements, positive `tabindex` values (SC 1.3.2 / 2.4.3), touch target sizes (SC 2.5.8), heading hierarchy (SC 1.3.1 / 2.4.6), landmark presence.
+4. Pre-screenshot cleanup — a `cy.document()` strips `__wcag_focus_style__` if present (keeps screenshots clean); if `WCAG_HIGHLIGHT_BOXES=true`, a second `cy.document()` injects `position:fixed` overlays with impact-colored borders and rule-ID labels over each violation node, then another removes them after the screenshot.
+5. `cy.screenshot()` — saved to `cypress/screenshots/ai-analysis/<SESSION_ID>/<scanLabel>.png` (Cypress headless prepends the spec filename; this is handled by the `ai:moveScreenshot` task).
+6. Node tasks — `ai:moveScreenshot` → `ai:save` (JSON) → `ai:saveHtml` (per-scan HTML) → `ai:saveCombinedHtml` (regenerated tabbed report + overwrites `latest.html`).
 
 ### Node tasks (`cypress.config.js`)
 
@@ -77,6 +85,10 @@ Both delegate to `generateScanBody(audit, date, screenshotRelPath)` for the per-
 
 In standalone reports the gear button is `position:fixed` (top-right corner). In combined reports it sits in the tab bar (`margin-left:auto`) so it doesn't overlap the page. The settings panel and `JS_SETTINGS` are always injected once per document, never per scan body.
 
+**Violation discipline grouping** — axe violations in the report are grouped into collapsible `<details open>` accordions by designer discipline (Visual → Interaction → Form → Structure → Other), with violations sorted by severity within each group. Each `violationCard` also shows a colored discipline pill. The mapping lives in `DISCIPLINE_MAP` (exact ID lookup) + `getDiscipline(v)` (prefix and WCAG tag fallbacks) in `wcag-html-report.js`. The five discipline colors are defined in `DISCIPLINE_COLORS`.
+
+**Audit timestamp** — the `date` string passed to `generateScanBody` is `YYYY-MM-DD HH:MM:SS` (local time), built in both `ai:saveHtml` and `ai:saveCombinedHtml`. The report header renders it verbatim as `Audited <date>`.
+
 **`latest.html`** — bookmarkable file at `reports/ai-insights/latest.html`. It is a full copy of the combined report (not a redirect), overwritten after every scan. Bookmarking this URL means refreshing after any run shows the newest output.
 
 ### Global support files
@@ -92,3 +104,6 @@ In standalone reports the gear button is `position:fixed` (top-right corner). In
 - `JS_PREFS` and `JS_SETTINGS` are injected once per HTML document, not once per scan body — including them inside `generateScanBody()` would duplicate the scripts in combined reports.
 - `sectionWrap()`'s 7th `passing` arg adds `data-wcag-pass`; the settings hide-passing toggle relies on `[data-wcag-pass]` selectors — never add `data-wcag-pass` to failing sections.
 - Text size uses `document.documentElement.style.zoom`, not `font-size` — all report text elements have explicit inline `font-size` declarations that override CSS inheritance.
+- `__wcag_focus_style__` must be stripped by a `cy.document()` before `cy.screenshot()` in `runAudit()` — the focus highlight is a live navigation aid and must never appear in report images. The amber bar state (`bar.style.background`) is handled by `window.blur`/`window.focus` listeners; `applyBarStyle()` restores the bar on focus return.
+- `WCAG_HIGHLIGHT_BOXES` overlays use `position:fixed` (not `absolute`) and `data-wcag-highlight` attribute — `position:fixed` keeps them viewport-aligned at screenshot time; the attribute is the reliable cleanup handle. Always remove overlays in a `cy.document()` immediately after `cy.screenshot()`.
+- Do not add new `win.__wcag_action__` values to the control bar — only `'scan'` and `'done'` are polled by `cy.window().should(...)`. Extend the bar with toggles that mutate DOM/styles only.
