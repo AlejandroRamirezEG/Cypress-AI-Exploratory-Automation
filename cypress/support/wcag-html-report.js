@@ -87,7 +87,19 @@ const HTML_SETTINGS_PANEL = `
                      color:#f8fafc;font-size:12px;font-weight:600;cursor:pointer">XL</button>
     </div>
 
-    <div style="font-size:11px;color:#94a3b8;margin-top:18px;padding-top:12px;
+    <div style="margin-top:18px;padding-top:14px;border-top:1px solid rgba(255,255,255,.07)">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;
+                  letter-spacing:.8px;color:#64748b;margin-bottom:10px">Section Order</div>
+      <button id="wcag-reset-order"
+        style="width:100%;padding:7px 0;background:rgba(255,255,255,.07);
+               border:1px solid rgba(255,255,255,.12);border-radius:6px;color:#f8fafc;
+               font-size:12px;font-weight:600;cursor:pointer;display:flex;
+               align-items:center;justify-content:center;gap:6px">
+        &#8635; Reset section order
+      </button>
+    </div>
+
+    <div style="font-size:11px;color:#94a3b8;margin-top:14px;padding-top:12px;
                 border-top:1px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:6px">
       Press
       <kbd style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);
@@ -199,6 +211,124 @@ const JS_PREFS = `
     });
   }
   if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}else{init();}
+})();
+</script>`;
+
+// Section reorder — HTML5 DnD on desktop, ▲▼ arrows on touch devices.
+// Order persisted in localStorage['wcag-section-order'] as an array of section keys.
+// Reset (↺ button in settings) removes the key and reloads.
+// In combined reports all panels share the same order (sections are identical across scans).
+const JS_REORDER = `
+<script>
+(function(){
+  var ORDER_KEY='wcag-section-order';
+  var isTouch=('ontouchstart' in window)||(navigator.maxTouchPoints>0);
+  function containers(){return Array.from(document.querySelectorAll('[data-wcag-sections]'));}
+  function sectionsIn(c){return Array.from(c.children).filter(function(el){return el.hasAttribute('data-wcag-section');});}
+  function saveOrder(){
+    var c=containers()[0];if(!c)return;
+    var o=sectionsIn(c).map(function(s){return s.getAttribute('data-wcag-section');});
+    try{localStorage.setItem(ORDER_KEY,JSON.stringify(o));}catch(e){}
+  }
+  function applyOrder(order){
+    containers().forEach(function(c){
+      var byKey={};
+      sectionsIn(c).forEach(function(s){byKey[s.getAttribute('data-wcag-section')]=s;});
+      order.forEach(function(k){var el=byKey[k];if(el)c.appendChild(el);});
+    });
+  }
+  function syncOtherPanels(sourceContainer){
+    var order=sectionsIn(sourceContainer).map(function(s){return s.getAttribute('data-wcag-section');});
+    containers().forEach(function(c){
+      if(c===sourceContainer)return;
+      var byKey={};
+      sectionsIn(c).forEach(function(s){byKey[s.getAttribute('data-wcag-section')]=s;});
+      order.forEach(function(k){var el=byKey[k];if(el)c.appendChild(el);});
+    });
+  }
+  function loadOrder(){
+    try{var saved=JSON.parse(localStorage.getItem(ORDER_KEY)||'null');
+      if(Array.isArray(saved)&&saved.length)applyOrder(saved);}catch(e){}
+  }
+  function resetOrder(){try{localStorage.removeItem(ORDER_KEY);}catch(e){}location.reload();}
+
+  function initDnd(){
+    var dragging=null,mouseOnHandle=false;
+    document.addEventListener('mouseup',function(){mouseOnHandle=false;});
+    containers().forEach(function(c){
+      sectionsIn(c).forEach(function(section){
+        section.setAttribute('draggable','true');
+        var h=section.querySelector('.wcag-drag-handle');
+        if(h){h.style.cursor='grab';h.addEventListener('mousedown',function(){mouseOnHandle=true;});}
+        section.addEventListener('dragstart',function(e){
+          if(!mouseOnHandle){e.preventDefault();return;}
+          dragging=section;
+          setTimeout(function(){section.style.opacity='0.4';},0);
+          e.dataTransfer.effectAllowed='move';
+        });
+        section.addEventListener('dragend',function(){
+          section.style.opacity='';
+          sectionsIn(c).forEach(function(s){s.style.outline='';s.style.outlineOffset='';});
+          if(dragging){syncOtherPanels(c);saveOrder();}
+          dragging=null;
+        });
+        section.addEventListener('dragover',function(e){
+          e.preventDefault();
+          if(!dragging||dragging===section||dragging.parentNode!==c)return;
+          e.dataTransfer.dropEffect='move';
+          sectionsIn(c).forEach(function(s){s.style.outline='';s.style.outlineOffset='';});
+          section.style.outline='2px dashed #2563eb';section.style.outlineOffset='2px';
+        });
+        section.addEventListener('dragleave',function(e){
+          if(!section.contains(e.relatedTarget)){section.style.outline='';section.style.outlineOffset='';}
+        });
+        section.addEventListener('drop',function(e){
+          e.preventDefault();
+          sectionsIn(c).forEach(function(s){s.style.outline='';s.style.outlineOffset='';});
+          if(!dragging||dragging===section||dragging.parentNode!==c)return;
+          var all=sectionsIn(c),fi=all.indexOf(dragging),ti=all.indexOf(section);
+          if(fi<ti)c.insertBefore(dragging,section.nextSibling);else c.insertBefore(dragging,section);
+        });
+      });
+    });
+  }
+
+  function initArrows(){
+    containers().forEach(function(c){
+      sectionsIn(c).forEach(function(section){
+        var h=section.querySelector('.wcag-drag-handle');if(h)h.style.display='none';
+        var sm=section.querySelector('summary');if(!sm)return;
+        var wrap=document.createElement('span');
+        wrap.style.cssText='display:inline-flex;gap:2px;flex-shrink:0;margin-right:2px';
+        function makeBtn(sym,title,dir){
+          var b=document.createElement('button');
+          b.textContent=sym;b.title=title;
+          b.style.cssText='background:rgba(0,0,0,.06);border:1px solid #e2e8f0;border-radius:3px;'+
+            'width:20px;height:20px;font-size:10px;cursor:pointer;color:#64748b;'+
+            'display:inline-flex;align-items:center;justify-content:center;flex-shrink:0';
+          b.addEventListener('click',function(e){
+            e.preventDefault();e.stopPropagation();
+            var all=sectionsIn(c),idx=all.indexOf(section);
+            if(dir===-1&&idx>0)c.insertBefore(section,all[idx-1]);
+            else if(dir===1&&idx<all.length-1)c.insertBefore(all[idx+1],section);
+            syncOtherPanels(c);saveOrder();
+          });
+          return b;
+        }
+        wrap.appendChild(makeBtn('▲','Move section up',-1));
+        wrap.appendChild(makeBtn('▼','Move section down',1));
+        sm.insertBefore(wrap,sm.firstChild);
+      });
+    });
+  }
+
+  function init(){
+    loadOrder();
+    if(isTouch)initArrows();else initDnd();
+    var rb=document.getElementById('wcag-reset-order');
+    if(rb)rb.addEventListener('click',resetOrder);
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 })();
 </script>`;
 
@@ -456,6 +586,7 @@ function sectionDivider(label) {
 function sectionWrap(key, title, scRef, badge, isOpen, content, passing) {
   return `<details data-wcag-section="${esc(key)}"${passing ? ' data-wcag-pass' : ''}${isOpen ? ' open' : ''} style="background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:14px;overflow:hidden">
   <summary style="padding:14px 20px;cursor:pointer;list-style:none;display:flex;align-items:center;gap:10px;flex-wrap:wrap;user-select:none">
+    <span class="wcag-drag-handle" aria-hidden="true" title="Drag to reorder" style="color:#cbd5e1;font-size:18px;flex-shrink:0;user-select:none;line-height:1">⠿</span>
     <span style="font-weight:700;font-size:15px;color:#0f172a;flex:1">${esc(title)}</span>
     ${scRef ? `<span style="font-size:11px;color:#94a3b8;font-weight:500;white-space:nowrap">${esc(scRef)}</span>` : ''}
     ${badge}
@@ -517,6 +648,7 @@ function generateScanBody(audit, date, screenshotRelPath) {
     </div>
   </div>
 
+  <div data-wcag-sections>
   ${sectionDivider('Findings')}
 
   ${screenshotRelPath ? sectionWrap(
@@ -752,6 +884,7 @@ function generateScanBody(audit, date, screenshotRelPath) {
       </div>`).join('')}
     </div>`
   )}
+  </div>
 
   <!-- Footer -->
   <div style="text-align:center;padding:20px 0 4px;font-size:11px;color:#94a3b8">
@@ -782,6 +915,7 @@ ${HTML_SETTINGS_BTN_FIXED}
 ${HTML_SETTINGS_PANEL}
 ${JS_PREFS}
 ${JS_SETTINGS}
+${JS_REORDER}
 </body>
 </html>`;
 }
@@ -834,6 +968,7 @@ ${generateScanBody(scan.audit, scan.date, scan.screenshotRelPath)}
 ${HTML_SETTINGS_PANEL}
 ${JS_PREFS}
 ${JS_SETTINGS}
+${JS_REORDER}
 
 </body>
 </html>`;
