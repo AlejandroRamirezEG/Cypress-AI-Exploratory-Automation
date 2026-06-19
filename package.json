@@ -12,7 +12,8 @@
     "test:ai_boxes": "npm run cy:run -- --spec 'cypress/e2e/ai-driven/ai-exploratory.cy.js' --env WCAG_HIGHLIGHT_BOXES=true",
     "test:ai_interactive": "cypress open --e2e --env WCAG_INTERACTIVE=true",
     "test:ai_interactive_boxes": "cypress open --e2e --env WCAG_INTERACTIVE=true,WCAG_HIGHLIGHT_BOXES=true",
-    "test:all": "npm run cy:run"
+    "test:all": "npm run cy:run",
+    "clean:reports": "node scripts/clean-reports.js"
   },
   "keywords": [
     "cypress",
