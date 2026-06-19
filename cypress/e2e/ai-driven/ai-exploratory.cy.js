@@ -601,6 +601,11 @@ function runAudit(scanLabel) {
     }
   })
 
+  cy.task('ai:saveMd', { scanLabel }).then(result => {
+    if (result.error) cy.log(`[wcag-audit] ERROR generating MD: ${result.error}`)
+    else cy.log(`[wcag-audit] MD → ${result.path}`)
+  })
+
   cy.task('ai:saveCombinedHtml').then(result => {
     if (!result.error) {
       cy.log(`[wcag-audit] Combined report → ${result.path} (${result.scanCount} scan${result.scanCount !== 1 ? 's' : ''})`)

@@ -24,6 +24,14 @@ const CSS_TABS = `
   .panel.wrap{padding-top:28px}
 `;
 
+// View-switcher: toggles between the full audit detail and the compact action items list.
+// html[data-view="actions"] activates the action view; default (omitted / "audit") shows audit.
+const CSS_VIEW = `
+  .wcag-action-view{display:none}
+  html[data-view=actions] .wcag-audit-view{display:none}
+  html[data-view=actions] .wcag-action-view{display:block}
+`;
+
 // ── settings panel ─────────────────────────────────────────────────────────────
 // Gear icon (⚙) opens this popover. Appears in the sticky tab bar for combined
 // reports and as a fixed button in the top-right for standalone reports.
@@ -39,9 +47,59 @@ const HTML_SETTINGS_BTN_FIXED = `
 
 const HTML_SETTINGS_BTN_TABBAR = `<button id="wcag-settings-btn"
   title="Report settings — press ? to toggle" aria-label="Report settings"
-  style="margin-left:auto;min-width:48px;min-height:44px;padding:0 14px;background:none;border:none;color:#64748b;
+  style="min-width:48px;min-height:44px;padding:0 14px;background:none;border:none;color:#64748b;
          font-size:20px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
          flex-shrink:0;border-bottom:3px solid transparent;margin-bottom:-2px">&#9881;</button>`;
+
+// View-switcher buttons — toggle between audit detail and action items views.
+// Fixed version sits to the left of the settings button. Tab-bar version uses margin-left:auto
+// to push itself (and the adjacent settings button) to the right of the tab row.
+const HTML_VIEW_BTN_FIXED = `
+<button id="wcag-view-btn" data-wcag-view-style="fixed"
+  title="Switch to action items view" aria-label="Toggle action items view"
+  style="position:fixed;top:10px;right:68px;z-index:200;background:#1e293b;color:#e2e8f0;
+         border:none;border-radius:10px;width:48px;height:48px;font-size:15px;cursor:pointer;
+         display:flex;align-items:center;justify-content:center;
+         box-shadow:0 2px 8px rgba(0,0,0,.25)">&#128203;</button>`;
+
+const HTML_VIEW_BTN_TABBAR = `<button id="wcag-view-btn" data-wcag-view-style="tabbar"
+  title="Switch to action items view" aria-label="Toggle action items view"
+  style="margin-left:auto;min-width:48px;min-height:44px;padding:0 16px;background:none;border:none;
+         color:#64748b;font:600 13px/1 system-ui,sans-serif;cursor:pointer;
+         display:inline-flex;align-items:center;justify-content:center;gap:6px;
+         white-space:nowrap;flex-shrink:0;border-bottom:3px solid transparent;margin-bottom:-2px">&#128203; Actions</button>`;
+
+const JS_VIEW_SWITCHER = `
+<script>
+(function(){
+  var VKEY='wcag-view',cur='audit';
+  try{cur=localStorage.getItem(VKEY)||'audit';}catch(e){}
+  function applyView(v){
+    document.documentElement.setAttribute('data-view',v);
+    cur=v;
+    var btn=document.getElementById('wcag-view-btn');
+    if(!btn)return;
+    var isAct=v==='actions';
+    var style=btn.getAttribute('data-wcag-view-style');
+    btn.title=isAct?'Switch to full audit view':'Switch to action items view';
+    btn.setAttribute('aria-pressed',String(isAct));
+    if(style==='tabbar'){
+      btn.innerHTML=isAct?'&#128203; Audit':'&#128203; Actions';
+      btn.style.color=isAct?'#1d4ed8':'#64748b';
+      btn.style.borderBottomColor=isAct?'#1d4ed8':'transparent';
+    } else {
+      btn.style.background=isAct?'#1d4ed8':'#1e293b';
+    }
+    try{localStorage.setItem(VKEY,v);}catch(e){}
+  }
+  function init(){
+    applyView(cur);
+    var btn=document.getElementById('wcag-view-btn');
+    if(btn)btn.addEventListener('click',function(){applyView(cur==='actions'?'audit':'actions');});
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
+})();
+</script>`;
 
 const HTML_SETTINGS_PANEL = `
 <div id="wcag-settings-panel" role="dialog" aria-label="Report settings" aria-modal="true"
@@ -436,6 +494,127 @@ function getDiscipline(v) {
   return 'Other';
 }
 
+// ── action items ─────────────────────────────────────────────────────────────
+// Derives a flat, priority-sorted list of actionable issues from one audit.
+// Combines axe violations with heuristic findings. Used by both the HTML
+// view-switcher and the .md export.
+
+function buildActionItems(audit) {
+  const {
+    summary: s = {}, violations = [], missingAlt = [], missingLabel = [],
+    negativeFocus = [], positiveFocus = [], smallTargets = [], headingIssues = [],
+    typographyIssues = [], reducedMotion = {}, ariaIssues = [],
+  } = audit;
+  const lm = s.landmarks || {};
+  const missingLandmarks = ['nav', 'header', 'footer'].filter(l => !(lm[l] > 0));
+  const items = [];
+
+  // Axe violations (already sorted below with final sort)
+  violations.forEach(v => items.push({
+    impact: v.impact, source: 'axe', id: v.id,
+    wcag: scTags(v.wcag), count: v.nodeCount, unit: 'element',
+    help: v.help, helpUrl: v.helpUrl,
+  }));
+
+  // Heuristic issues — only push when count > 0
+  const push = (impact, id, wcag, count, unit, help, helpUrl) =>
+    items.push({ impact, source: 'heuristic', id, wcag, count, unit, help, helpUrl });
+
+  const ariaErrors  = ariaIssues.filter(i => i.severity === 'error');
+  const ariaWarns   = ariaIssues.filter(i => i.severity === 'warning');
+  const tgtFails    = smallTargets.filter(t => t.severity === 'fail');
+  const tgtWarns    = smallTargets.filter(t => t.severity === 'warn');
+  const txtFails    = typographyIssues.filter(t => t.severity === 'fail');
+  const txtWarns    = typographyIssues.filter(t => t.severity === 'warn');
+
+  if (ariaErrors.length)       push('critical', 'aria-hidden-focusable',  'SC 4.1.2',         ariaErrors.length,       'element',  'Remove aria-hidden from elements containing focusable children',                                  'https://www.w3.org/WAI/WCAG21/Understanding/name-role-value');
+  if (missingLabel.length)     push('serious',  'missing-label',          'SC 1.3.1 · 4.1.2', missingLabel.length,     'input',    'Add a visible <label>, aria-label, or aria-labelledby to each input',                          'https://www.w3.org/WAI/WCAG21/Understanding/info-and-relationships');
+  if (missingAlt.length)       push('serious',  'missing-alt-text',       'SC 1.1.1',         missingAlt.length,       'image',    'Add descriptive alt text; use alt="" for decorative images',                                     'https://www.w3.org/WAI/WCAG21/Understanding/non-text-content');
+  if (txtFails.length)         push('serious',  'text-too-small',         'SC 1.4.4',         txtFails.length,         'element',  'Increase font size to at least 12 px',                                                           'https://www.w3.org/WAI/WCAG21/Understanding/resize-text');
+  if (tgtFails.length)         push('serious',  'touch-target-fail',      'SC 2.5.8',         tgtFails.length,         'element',  'Increase touch target to minimum 24×24 px (WCAG 2.2 failure)',                                   'https://www.w3.org/WAI/WCAG22/Understanding/target-size-minimum');
+  if (headingIssues.length)    push('moderate', 'heading-hierarchy',      'SC 1.3.1 · 2.4.6', headingIssues.length,    'issue',    'Fix heading hierarchy — start with h1, do not skip levels',                                      'https://www.w3.org/WAI/WCAG21/Understanding/headings-and-labels');
+  if (ariaWarns.length)        push('moderate', 'conflicting-role',       'SC 4.1.2',         ariaWarns.length,        'element',  'Remove role attributes that conflict with the element\'s native semantics',                       'https://www.w3.org/WAI/WCAG21/Understanding/name-role-value');
+  if (missingLandmarks.length) push('moderate', 'missing-landmarks',      'SC 1.3.6 · 2.4.1', missingLandmarks.length, 'landmark', 'Add missing landmark elements: ' + missingLandmarks.map(l => '<' + l + '>').join(', '),          'https://www.w3.org/WAI/WCAG21/Understanding/identify-purpose');
+  if (positiveFocus.length)    push('moderate', 'positive-tabindex',      'SC 1.3.2 · 2.4.3', positiveFocus.length,    'element',  'Remove positive tabindex values; reorder elements in DOM instead',                               'https://www.w3.org/WAI/WCAG21/Understanding/meaningful-sequence');
+  if (tgtWarns.length)         push('minor',    'touch-target-small',     'SC 2.5.8',         tgtWarns.length,         'element',  'Consider increasing touch target to 44×44 px for iOS/Android guidelines',                        'https://www.w3.org/WAI/WCAG22/Understanding/target-size-minimum');
+  if (txtWarns.length)         push('minor',    'thin-text',              'SC 1.4.4',         txtWarns.length,         'element',  'Avoid font-weight ≤ 300 at font sizes below 16 px',                                              'https://www.w3.org/WAI/WCAG21/Understanding/resize-text');
+  if (negativeFocus.length)    push('minor',    'negative-tabindex',      'SC 2.1.1',         negativeFocus.length,    'element',  'Verify each tabindex="-1" element is intentionally excluded from tab order',                      'https://www.w3.org/WAI/WCAG21/Understanding/keyboard');
+  if (reducedMotion.status === 'warn') push('minor', 'prefers-reduced-motion', 'SC 2.3.3',    1,                       'page',     'Wrap animations in @media (prefers-reduced-motion: reduce) { animation: none }',                  'https://www.w3.org/WAI/WCAG21/Understanding/animation-from-interactions');
+
+  return items.sort((a, b) => (SORT_ORDER[a.impact] ?? 9) - (SORT_ORDER[b.impact] ?? 9));
+}
+
+function generateActionItemsHtml(audit) {
+  const items = buildActionItems(audit);
+
+  if (!items.length) {
+    return `<div style="text-align:center;padding:60px 20px">
+      <div style="font-size:52px;line-height:1;margin-bottom:16px">&#10003;</div>
+      <p style="color:#16a34a;font-size:18px;font-weight:700;margin-bottom:8px">No issues to fix</p>
+      <p style="color:#64748b;font-size:13px">This scan found no axe violations and no heuristic issues.</p>
+    </div>`;
+  }
+
+  const IMPACTS = ['critical', 'serious', 'moderate', 'minor'];
+  const sectionLabel = 'font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#94a3b8;margin:24px 0 10px';
+
+  return `<div style="margin-bottom:20px">
+    <p style="font-size:13px;color:#64748b">${items.length} issue${items.length !== 1 ? 's' : ''} to address — sorted by impact. Axe violations and heuristic checks combined.</p>
+  </div>
+  ${IMPACTS.map(impact => {
+    const group = items.filter(i => i.impact === impact);
+    if (!group.length) return '';
+    const c = IMPACT[impact] || IMPACT.minor;
+    return `<div style="${sectionLabel}">${impact.toUpperCase()} (${group.length})</div>
+    ${group.map((item, idx) => {
+      const srcBg    = item.source === 'axe' ? '#f1f5f9' : '#f5f3ff';
+      const srcColor = item.source === 'axe' ? '#475569' : '#5b21b6';
+      return `<div style="background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.07);margin-bottom:8px;padding:14px 18px;border-left:4px solid ${c.chip};display:flex;align-items:flex-start;gap:14px">
+        <div style="font-size:12px;font-weight:700;color:#94a3b8;min-width:22px;padding-top:1px">${idx + 1}</div>
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+            <code style="font-weight:700;font-size:13px;color:#0f172a">${esc(item.id)}</code>
+            ${item.wcag ? `<span style="font-size:11px;color:#64748b;font-weight:600;white-space:nowrap">${esc(item.wcag)}</span>` : ''}
+            <span style="font-size:10px;font-weight:600;padding:2px 7px;border-radius:4px;background:${srcBg};color:${srcColor};text-transform:uppercase;letter-spacing:.4px">${item.source}</span>
+            <span style="margin-left:auto;font-size:12px;color:${c.chip};font-weight:700;white-space:nowrap">${item.count}&thinsp;${esc(item.unit)}${item.count !== 1 ? 's' : ''}</span>
+          </div>
+          <p style="font-size:13px;color:#334155;margin:0 0 6px;line-height:1.45">${esc(item.help)}</p>
+          ${item.helpUrl ? `<a href="${esc(item.helpUrl)}" target="_blank" rel="noopener" style="font-size:12px;color:#2563eb;font-weight:600;text-decoration:none">Learn how to fix &#8594;</a>` : ''}
+        </div>
+      </div>`;
+    }).join('\n')}`;
+  }).join('\n')}`;
+}
+
+function generateActionItemsMd(audit, date) {
+  const { summary: s = {} } = audit;
+  const items = buildActionItems(audit);
+  const lines = [
+    `# WCAG Action Items — ${s.scanLabel || 'Scan'}`,
+    '',
+    `**URL:** ${s.url || ''}`,
+    `**Audited:** ${date || ''}`,
+    `**Total issues:** ${items.length}`,
+    '',
+  ];
+  ['critical', 'serious', 'moderate', 'minor'].forEach(impact => {
+    const group = items.filter(i => i.impact === impact);
+    if (!group.length) return;
+    lines.push(`## ${impact.charAt(0).toUpperCase() + impact.slice(1)} (${group.length})`);
+    lines.push('');
+    group.forEach((item, idx) => {
+      lines.push(`${idx + 1}. **\`${item.id}\`** [${item.source}]${item.wcag ? ' · ' + item.wcag : ''} · ${item.count} ${item.unit}${item.count !== 1 ? 's' : ''}`);
+      lines.push(`   ${item.help}`);
+      if (item.helpUrl) lines.push(`   → ${item.helpUrl}`);
+      lines.push('');
+    });
+  });
+  if (!items.length) { lines.push('_No issues found. All checks passed._'); lines.push(''); }
+  lines.push('---');
+  lines.push('_Generated by Cypress axe-core WCAG audit_');
+  return lines.join('\n');
+}
+
 function chip(impact) {
   const c = IMPACT[impact] || { chip: '#6b7280' };
   return `<span style="background:${c.chip};color:#fff;padding:3px 9px;border-radius:4px;font-size:11px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;white-space:nowrap">${esc(impact)}</span>`;
@@ -654,7 +833,7 @@ function generateScanBody(audit, date, screenshotRelPath) {
     </div>
   </div>
 
-  <div data-wcag-sections>
+  <div class="wcag-audit-view"><div data-wcag-sections>
   ${screenshotRelPath ? sectionWrap(
     'screenshot', 'Page Screenshot', null,
     `<span style="font-size:11px;font-weight:400;font-family:monospace;color:#94a3b8;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block">${esc(screenshotRelPath)}</span>`,
@@ -982,9 +1161,13 @@ function generateScanBody(audit, date, screenshotRelPath) {
       </div>`).join('')}
     </div>`
   )}
+  </div></div>
+
+  <div class="wcag-action-view">
+  ${generateActionItemsHtml(audit)}
   </div>
 
-  <!-- Footer -->
+  <!-- Footer — always visible in both views -->
   <div style="text-align:center;padding:20px 0 4px;font-size:11px;color:#94a3b8">
     Generated by Cypress axe-core audit &nbsp;·&nbsp; ${esc(date)} &nbsp;·&nbsp;
     <a href="https://www.w3.org/WAI/WCAG21/quickref/" target="_blank" rel="noopener" style="color:#94a3b8">WCAG 2.1 Quick Reference</a>
@@ -1003,17 +1186,19 @@ function generateWcagHtml(audit, date, screenshotRelPath) {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>WCAG Report — ${esc(s.title || s.url || 'Accessibility Audit')}</title>
-  <style>${CSS_BASE}</style>
+  <style>${CSS_BASE}${CSS_VIEW}</style>
 </head>
 <body>
 <div class="wrap">
 ${generateScanBody(audit, date, screenshotRelPath)}
 </div>
+${HTML_VIEW_BTN_FIXED}
 ${HTML_SETTINGS_BTN_FIXED}
 ${HTML_SETTINGS_PANEL}
 ${JS_PREFS}
 ${JS_SETTINGS}
 ${JS_REORDER}
+${JS_VIEW_SWITCHER}
 </body>
 </html>`;
 }
@@ -1043,12 +1228,13 @@ function generateCombinedWcagHtml(scans) {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>WCAG Report — ${esc(first.title || first.url || 'Accessibility Audit')} (${scans.length} scan${scans.length !== 1 ? 's' : ''})</title>
-  <style>${CSS_BASE}${CSS_TABS}</style>
+  <style>${CSS_BASE}${CSS_TABS}${CSS_VIEW}</style>
 </head>
 <body>
 
 <div class="tab-bar">
   ${scans.map(tabBtn).join('\n  ')}
+  ${HTML_VIEW_BTN_TABBAR}
   ${HTML_SETTINGS_BTN_TABBAR}
 </div>
 
@@ -1067,9 +1253,10 @@ ${HTML_SETTINGS_PANEL}
 ${JS_PREFS}
 ${JS_SETTINGS}
 ${JS_REORDER}
+${JS_VIEW_SWITCHER}
 
 </body>
 </html>`;
 }
 
-module.exports = { generateWcagHtml, generateCombinedWcagHtml };
+module.exports = { generateWcagHtml, generateCombinedWcagHtml, generateActionItemsMd };

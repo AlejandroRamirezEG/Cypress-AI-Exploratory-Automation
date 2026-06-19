@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { generateWcagHtml, generateCombinedWcagHtml } = require('./cypress/support/wcag-html-report');
+const { generateWcagHtml, generateCombinedWcagHtml, generateActionItemsMd } = require('./cypress/support/wcag-html-report');
 
 const { defineConfig } = require('cypress');
 
@@ -176,6 +176,30 @@ module.exports = defineConfig({
             fs.writeFileSync(latestFile, generateCombinedWcagHtml(scansForLatest));
 
             return { path: outFile, latestPath: latestFile, scanCount: scans.length };
+          } catch (err) {
+            return { error: String(err) };
+          }
+        },
+
+        // Generate a markdown action-items file alongside the HTML report.
+        // Output: reports/ai-insights/<SESSION_ID>/wcag-action-items-<scanLabel>.md
+        'ai:saveMd'(payload) {
+          try {
+            const scanLabel = typeof payload === 'object' && payload ? (payload.scanLabel || null) : null;
+            const audit = [...aiInsights.tests].reverse().find(t =>
+              t.type === 'wcagAudit' &&
+              (scanLabel ? t.summary && t.summary.scanLabel === scanLabel : true)
+            );
+            if (!audit) return { error: 'No wcagAudit entry found; run ai-exploratory.cy.js first' };
+
+            const _d = new Date(), _p = n => String(n).padStart(2, '0');
+            const date = `${_d.getFullYear()}-${_p(_d.getMonth()+1)}-${_p(_d.getDate())} ${_p(_d.getHours())}:${_p(_d.getMinutes())}:${_p(_d.getSeconds())}`;
+
+            const md = generateActionItemsMd(audit, date);
+            if (!fs.existsSync(SESSION_REPORT_DIR)) fs.mkdirSync(SESSION_REPORT_DIR, { recursive: true });
+            const outFile = path.join(SESSION_REPORT_DIR, `wcag-action-items-${scanLabel || 'scan'}.md`);
+            fs.writeFileSync(outFile, md);
+            return { path: outFile };
           } catch (err) {
             return { error: String(err) };
           }
