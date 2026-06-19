@@ -18,6 +18,8 @@
 //    WCAG_SCAN_TIMEOUT=<ms>        how long to wait for a button click before timing out
 //                                  (default: 600000 = 10 min per cycle)
 //    BASE_URL=<url>                page to audit
+//    WCAG_FAIL_ON_CRITICAL=true    CI gate: fail the test if any critical axe violation is found
+//                                  (automated mode only; interactive mode always collects without failing)
 //
 //  Output per scan: reports/ai-insights/wcag-report-scan-<n>.html
 //                   reports/ai-insights/latest-report.json  (all scans appended)
@@ -28,7 +30,8 @@ const SCAN_WAIT_MS = parseInt(Cypress.env('WCAG_SCAN_TIMEOUT') || String(10 * 60
 // Injected by setupNodeEvents at Cypress launch — groups all output for this session.
 const SESSION_ID = Cypress.env('SESSION_ID') || 'no-session'
 
-const HIGHLIGHT_BOXES = !!Cypress.env('WCAG_HIGHLIGHT_BOXES')
+const HIGHLIGHT_BOXES    = !!Cypress.env('WCAG_HIGHLIGHT_BOXES')
+const FAIL_ON_CRITICAL   = !!Cypress.env('WCAG_FAIL_ON_CRITICAL')
 
 const IMPACT_LABEL = {
   critical: 'WCAG Failure — Critical',
@@ -517,6 +520,15 @@ function runAudit(scanLabel) {
 
     cy.log(`[wcag-audit] ${scanLabel} — ${violations.length} violations — ${JSON.stringify(summary.byImpact)}`)
     cy.task('ai:log', { type: 'wcagAudit', summary, violations, missingAlt, missingLabel, negativeFocus, positiveFocus, smallTargets, headingIssues, typographyIssues, reducedMotion, ariaIssues })
+
+    // CI gate — only in automated mode so interactive sessions are never hard-blocked.
+    if (FAIL_ON_CRITICAL && !INTERACTIVE) {
+      const critical = violations.filter(v => v.impact === 'critical')
+      expect(
+        critical.length,
+        `WCAG CI gate: ${critical.length} critical violation(s) found (${critical.map(v => v.id).join(', ')}). Fix or set WCAG_FAIL_ON_CRITICAL=false to audit without failing.`
+      ).to.equal(0)
+    }
   })
 
   // Remove focus highlight style before screenshot so it doesn't appear in the report image.

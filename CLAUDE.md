@@ -22,6 +22,7 @@ Without this file, runs default to `https://www.saucedemo.com`.
 
 Optional flags (add to `cypress.env.json` or pass via `--env`):
 - `WCAG_HIGHLIGHT_BOXES: true` — inject impact-colored bounding boxes + rule-ID labels over each violating element before `cy.screenshot()`, then remove them. Off by default; the `_boxes` scripts above enable it for one run.
+- `WCAG_FAIL_ON_CRITICAL: true` — CI gate: fail the test if any axe violation with `impact === "critical"` is found. Off by default. Has no effect in interactive mode — interactive sessions always collect without failing. Use `pnpm test:ai_ci` to enable for one run.
 
 ## Architecture
 
