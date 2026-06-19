@@ -604,7 +604,7 @@ function sectionWrap(key, title, scRef, badge, isOpen, content, passing) {
 // ── single-scan body (no html/head/body wrapper) ──────────────────────────────
 
 function generateScanBody(audit, date, screenshotRelPath) {
-  const { summary: s = {}, violations = [], missingAlt = [], missingLabel = [], negativeFocus = [], positiveFocus = [], smallTargets = [], headingIssues = [], typographyIssues = [] } = audit;
+  const { summary: s = {}, violations = [], missingAlt = [], missingLabel = [], negativeFocus = [], positiveFocus = [], smallTargets = [], headingIssues = [], typographyIssues = [], reducedMotion = {} } = audit;
   const byImpact = s.byImpact || {};
   const lm = s.landmarks || {};
   const ec = s.elementCounts || {};
@@ -649,6 +649,7 @@ function generateScanBody(audit, date, screenshotRelPath) {
       ${scoreCard(s.smallTargetCount    || 0, 'Small Targets',   'SC 2.5.8 / 44px',   '#f59e0b')}
       ${scoreCard(s.headingIssueCount   || 0, 'Heading Issues',  'SC 1.3.1 / 2.4.6',  '#8b5cf6')}
       ${scoreCard(s.typographyIssueCount|| 0, 'Typography',      'SC 1.4.4 / size+wt', '#db2777')}
+      ${scoreCard(s.reducedMotionWarning|| 0, 'Motion Guard',    'SC 2.3.3 / best practice', '#0ea5e9')}
     </div>
   </div>
 
@@ -834,6 +835,41 @@ function generateScanBody(audit, date, screenshotRelPath) {
          </table>`
       : `<p style="color:#166334;font-size:14px;font-weight:600;padding:8px 0">No typography issues found &#10003;</p>`,
     typographyIssues.length === 0
+  )}
+
+  ${sectionWrap(
+    'reduced-motion', 'Reduced Motion Support', 'SC 2.3.3 / best practice',
+    reducedMotion.status === 'warn' ? warnBadge(1) : passBadge(),
+    false,
+    (() => {
+      const { hasAnimation, hasReducedMotionQuery, keyframeCount, status } = reducedMotion;
+      if (!hasAnimation) {
+        return `<p style="color:#16a34a;font-size:14px;font-weight:600;padding:8px 0">No CSS animations or transitions detected &#10003;</p>
+          <p style="font-size:13px;color:#64748b;margin-top:4px">No <code>@media (prefers-reduced-motion)</code> guard needed.</p>`;
+      }
+      if (status === 'pass') {
+        return `<p style="color:#16a34a;font-size:14px;font-weight:600;padding:8px 0">CSS motion detected — <code>@media (prefers-reduced-motion)</code> guard present &#10003;</p>
+          <p style="font-size:13px;color:#64748b;margin-top:4px">
+            Found ${esc(String(keyframeCount))} <code>@keyframes</code> rule${keyframeCount !== 1 ? 's' : ''} and animation/transition properties.
+            The <code>@media (prefers-reduced-motion: reduce)</code> block provides an override for users who need it.
+          </p>`;
+      }
+      return `<p style="font-size:14px;font-weight:600;padding:8px 0;color:#b45309">
+          CSS animations or transitions detected but no <code>@media (prefers-reduced-motion)</code> guard found.
+        </p>
+        <p style="font-size:13px;color:#64748b;margin:8px 0 14px">
+          Users who have requested reduced motion in their OS settings will still see all animations.
+          Wrap non-essential animations in a <code>@media (prefers-reduced-motion: reduce)</code> block and set them to <code>animation: none</code> or <code>transition: none</code>.
+        </p>
+        <div style="background:#fef3c7;border:1px solid #fde68a;border-radius:6px;padding:12px 16px;font-size:13px;color:#78350f">
+          <strong>Detected:</strong>
+          ${keyframeCount ? `${esc(String(keyframeCount))} @keyframes rule${keyframeCount !== 1 ? 's' : ''}` : ''}
+          ${hasAnimation && !keyframeCount ? 'CSS <code>animation</code> or <code>transition</code> properties' : ''}
+          <br>
+          <strong>Missing:</strong> <code>@media (prefers-reduced-motion: reduce) { … }</code>
+        </div>`;
+    })(),
+    reducedMotion.status !== 'warn'
   )}
 
   ${sectionWrap(

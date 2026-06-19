@@ -367,6 +367,47 @@ function runAudit(scanLabel) {
         .filter(Boolean)
     })()
 
+    // Prefers-reduced-motion: scan stylesheets for @keyframes / animation / transition
+    // declarations and check for a corresponding @media (prefers-reduced-motion) guard.
+    // Cross-origin sheets silently skip (SecurityError on cssRules access).
+    const reducedMotion = (() => {
+      let hasAnimation = false
+      let hasReducedMotionQuery = false
+      let keyframeCount = 0
+      try {
+        const sheets = Array.from(doc.styleSheets)
+        for (const sheet of sheets) {
+          let rules
+          try { rules = Array.from(sheet.cssRules || []) } catch { continue }
+          for (const rule of rules) {
+            if (rule instanceof CSSKeyframesRule) {
+              keyframeCount++
+              hasAnimation = true
+            } else if (rule instanceof CSSMediaRule) {
+              const media = rule.conditionText || (rule.media && rule.media.mediaText) || ''
+              if (/prefers-reduced-motion/i.test(media)) {
+                hasReducedMotionQuery = true
+              }
+              try {
+                Array.from(rule.cssRules || []).forEach(inner => {
+                  if (!inner.style) return
+                  const a = inner.style.getPropertyValue('animation') || inner.style.getPropertyValue('animation-name') || ''
+                  const t = inner.style.getPropertyValue('transition') || ''
+                  if ((a && a !== 'none') || (t && t !== 'none')) hasAnimation = true
+                })
+              } catch {}
+            } else if (rule.style) {
+              const a = rule.style.getPropertyValue('animation') || rule.style.getPropertyValue('animation-name') || ''
+              const t = rule.style.getPropertyValue('transition') || ''
+              if ((a && a !== 'none') || (t && t !== 'none')) hasAnimation = true
+            }
+          }
+        }
+      } catch {}
+      const status = !hasAnimation ? 'pass' : hasReducedMotionQuery ? 'pass' : 'warn'
+      return { hasAnimation, hasReducedMotionQuery, keyframeCount, status }
+    })()
+
     const landmarks = {
       main: doc.querySelectorAll('main, [role="main"]').length,
       nav: doc.querySelectorAll('nav, [role="navigation"]').length,
@@ -400,12 +441,13 @@ function runAudit(scanLabel) {
       headingIssueCount: headingIssues.length,
       smallTargetCount: smallTargets.length,
       typographyIssueCount: typographyIssues.length,
+      reducedMotionWarning: reducedMotion.status === 'warn' ? 1 : 0,
       landmarks,
       elementCounts: counts,
     }
 
     cy.log(`[wcag-audit] ${scanLabel} — ${violations.length} violations — ${JSON.stringify(summary.byImpact)}`)
-    cy.task('ai:log', { type: 'wcagAudit', summary, violations, missingAlt, missingLabel, negativeFocus, positiveFocus, smallTargets, headingIssues, typographyIssues })
+    cy.task('ai:log', { type: 'wcagAudit', summary, violations, missingAlt, missingLabel, negativeFocus, positiveFocus, smallTargets, headingIssues, typographyIssues, reducedMotion })
   })
 
   // Remove focus highlight style before screenshot so it doesn't appear in the report image.
