@@ -520,15 +520,6 @@ function runAudit(scanLabel) {
 
     cy.log(`[wcag-audit] ${scanLabel} — ${violations.length} violations — ${JSON.stringify(summary.byImpact)}`)
     cy.task('ai:log', { type: 'wcagAudit', summary, violations, missingAlt, missingLabel, negativeFocus, positiveFocus, smallTargets, headingIssues, typographyIssues, reducedMotion, ariaIssues })
-
-    // CI gate — only in automated mode so interactive sessions are never hard-blocked.
-    if (FAIL_ON_CRITICAL && !INTERACTIVE) {
-      const critical = violations.filter(v => v.impact === 'critical')
-      expect(
-        critical.length,
-        `WCAG CI gate: ${critical.length} critical violation(s) found (${critical.map(v => v.id).join(', ')}). Fix or set WCAG_FAIL_ON_CRITICAL=false to audit without failing.`
-      ).to.equal(0)
-    }
   })
 
   // Remove focus highlight style before screenshot so it doesn't appear in the report image.
@@ -615,6 +606,18 @@ function runAudit(scanLabel) {
       cy.log(`[wcag-audit] Combined report → ${result.path} (${result.scanCount} scan${result.scanCount !== 1 ? 's' : ''})`)
     }
   })
+
+  // CI gate — fires after all reports are saved so the HTML report is always readable
+  // even when the build fails. Only in automated mode; interactive sessions never fail.
+  if (FAIL_ON_CRITICAL && !INTERACTIVE) {
+    cy.then(() => {
+      const critical = violations.filter(v => v.impact === 'critical')
+      expect(
+        critical.length,
+        `WCAG CI gate: ${critical.length} critical violation(s) found (${critical.map(v => v.id).join(', ')}). Fix or set WCAG_FAIL_ON_CRITICAL=false to audit without failing.`
+      ).to.equal(0)
+    })
+  }
 }
 
 // ── spec ─────────────────────────────────────────────────────────────────────
