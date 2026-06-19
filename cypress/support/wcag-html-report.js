@@ -604,7 +604,7 @@ function sectionWrap(key, title, scRef, badge, isOpen, content, passing) {
 // ── single-scan body (no html/head/body wrapper) ──────────────────────────────
 
 function generateScanBody(audit, date, screenshotRelPath) {
-  const { summary: s = {}, violations = [], missingAlt = [], missingLabel = [], negativeFocus = [], positiveFocus = [], smallTargets = [], headingIssues = [], typographyIssues = [], reducedMotion = {} } = audit;
+  const { summary: s = {}, violations = [], missingAlt = [], missingLabel = [], negativeFocus = [], positiveFocus = [], smallTargets = [], headingIssues = [], typographyIssues = [], reducedMotion = {}, ariaIssues = [] } = audit;
   const byImpact = s.byImpact || {};
   const lm = s.landmarks || {};
   const ec = s.elementCounts || {};
@@ -650,6 +650,7 @@ function generateScanBody(audit, date, screenshotRelPath) {
       ${scoreCard(s.headingIssueCount   || 0, 'Heading Issues',  'SC 1.3.1 / 2.4.6',  '#8b5cf6')}
       ${scoreCard(s.typographyIssueCount|| 0, 'Typography',      'SC 1.4.4 / size+wt', '#db2777')}
       ${scoreCard(s.reducedMotionWarning|| 0, 'Motion Guard',    'SC 2.3.3 / best practice', '#0ea5e9')}
+      ${scoreCard(s.ariaIssueCount      || 0, 'ARIA Misuse',     'SC 4.1.2 / 1.3.1',         '#f43f5e')}
     </div>
   </div>
 
@@ -871,6 +872,69 @@ function generateScanBody(audit, date, screenshotRelPath) {
     })(),
     reducedMotion.status !== 'warn'
   )}
+
+  ${(() => {
+    const errors    = ariaIssues.filter(i => i.type === 'aria-hidden-focusable');
+    const warnings  = ariaIssues.filter(i => i.type === 'conflicting-role');
+    const advisory  = ariaIssues.filter(i => i.type === 'redundant-label');
+    const issueCount = errors.length + warnings.length;
+
+    function ariaTable(rows) {
+      const th = 'padding:8px 10px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.4px';
+      const td = 'padding:7px 10px;border-bottom:1px solid #f1f5f9;font-size:12px';
+      return `<table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0">
+          <th style="${th}">Element</th>
+          <th style="${th}">Role</th>
+          <th style="${th}">Text / Label</th>
+          <th style="${th}">Issue</th>
+        </tr></thead>
+        <tbody>${rows.map(r => {
+          const sevColor = r.severity === 'error' ? '#dc2626' : r.severity === 'warning' ? '#d97706' : '#2563eb';
+          const sevBg    = r.severity === 'error' ? '#fef2f2' : r.severity === 'warning' ? '#fffbeb' : '#eff6ff';
+          return `<tr>
+            <td style="${td};font-family:monospace">&lt;${esc(r.tag)}&gt;</td>
+            <td style="${td};color:#64748b;font-family:monospace;font-size:11px">${r.role ? esc(r.role) : '—'}</td>
+            <td style="${td};color:#64748b;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.visibleText || r.label || '—')}</td>
+            <td style="${td}"><span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:4px;background:${sevBg};color:${sevColor}">${esc(r.severity)}</span> ${esc(r.message)}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>`;
+    }
+
+    const content = issueCount === 0 && advisory.length === 0
+      ? `<p style="color:#16a34a;font-size:14px;font-weight:600;padding:8px 0">No ARIA misuse detected &#10003;</p>`
+      : `<p style="font-size:13px;color:#64748b;margin:8px 0 16px">
+          Heuristic checks complementing axe's ARIA rules. Errors and warnings indicate real problems;
+          advisories are informational only.
+        </p>
+        ${errors.length ? `<div style="margin-bottom:16px">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#dc2626;margin-bottom:8px">
+            aria-hidden with focusable children (${errors.length})
+          </div>
+          ${ariaTable(errors)}
+        </div>` : ''}
+        ${warnings.length ? `<div style="margin-bottom:16px">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#d97706;margin-bottom:8px">
+            Conflicting role (${warnings.length})
+          </div>
+          ${ariaTable(warnings)}
+        </div>` : ''}
+        ${advisory.length ? `<details style="margin-top:8px">
+          <summary style="font-size:12px;color:#64748b;cursor:pointer;list-style:none;padding:4px 0">
+            Advisory — redundant aria-label (${advisory.length}) &#9656;
+          </summary>
+          <div style="margin-top:8px">${ariaTable(advisory)}</div>
+        </details>` : ''}`;
+
+    return sectionWrap(
+      'aria-misuse', 'ARIA Misuse', 'SC 4.1.2 / 1.3.1',
+      issueCount > 0 ? issueBadge(issueCount) : (advisory.length > 0 ? warnBadge(advisory.length) : passBadge()),
+      issueCount > 0,
+      content,
+      issueCount === 0 && advisory.length === 0
+    );
+  })()}
 
   ${sectionWrap(
     'structure', 'Document Structure', 'SC 1.3.1 / 2.4.6',

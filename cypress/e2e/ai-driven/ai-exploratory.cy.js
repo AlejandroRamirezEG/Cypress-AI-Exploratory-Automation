@@ -408,6 +408,73 @@ function runAudit(scanLabel) {
       return { hasAnimation, hasReducedMotionQuery, keyframeCount, status }
     })()
 
+    // ARIA misuse: three heuristic checks that complement axe's ARIA rules.
+    const ariaIssues = (() => {
+      const issues = []
+      const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
+      // 1. aria-hidden="true" containing focusable children (WCAG SC 4.1.2 / 1.3.1)
+      Array.from(doc.querySelectorAll('[aria-hidden="true"]'))
+        .filter(el => el.querySelector(FOCUSABLE))
+        .slice(0, 10)
+        .forEach(el => {
+          const n = el.querySelectorAll(FOCUSABLE).length
+          issues.push({
+            type: 'aria-hidden-focusable',
+            severity: 'error',
+            tag: el.tagName.toLowerCase(),
+            role: el.getAttribute('role') || null,
+            label: el.getAttribute('aria-label') || null,
+            visibleText: (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80),
+            message: `aria-hidden="true" conceals ${n} focusable child${n !== 1 ? 'ren' : ''} from assistive technology`,
+          })
+        })
+
+      // 2. Role conflicts with native element semantics
+      const ROLE_CONFLICTS = [
+        { sel: 'button[role]', nativeRole: 'button', badRoles: ['link', 'menuitem', 'option', 'none', 'presentation'] },
+        { sel: 'a[href][role]', nativeRole: 'link',   badRoles: ['presentation', 'none'] },
+        { sel: 'h1[role],h2[role],h3[role],h4[role],h5[role],h6[role]', nativeRole: 'heading', badRoles: ['presentation', 'none'] },
+        { sel: 'input[type="checkbox"][role]', nativeRole: 'checkbox', badRoles: ['button', 'link'] },
+        { sel: 'input[type="radio"][role]',    nativeRole: 'radio',    badRoles: ['button', 'link'] },
+      ]
+      ROLE_CONFLICTS.forEach(({ sel, nativeRole, badRoles }) => {
+        Array.from(doc.querySelectorAll(sel)).slice(0, 20).forEach(el => {
+          const role = (el.getAttribute('role') || '').trim().toLowerCase()
+          if (!badRoles.includes(role)) return
+          issues.push({
+            type: 'conflicting-role',
+            severity: 'warning',
+            tag: el.tagName.toLowerCase(),
+            role,
+            label: el.getAttribute('aria-label') || null,
+            visibleText: (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80),
+            message: `Native role "${nativeRole}" overridden by role="${role}" — may confuse assistive technology`,
+          })
+        })
+      })
+
+      // 3. aria-label identical to visible text (redundant, advisory only)
+      Array.from(doc.querySelectorAll('[aria-label]')).slice(0, 50).forEach(el => {
+        const ariaLabel = (el.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ')
+        const visibleText = (el.textContent || '').trim().replace(/\s+/g, ' ')
+        if (!ariaLabel || !visibleText) return
+        if (ariaLabel.toLowerCase() === visibleText.toLowerCase()) {
+          issues.push({
+            type: 'redundant-label',
+            severity: 'advisory',
+            tag: el.tagName.toLowerCase(),
+            role: el.getAttribute('role') || null,
+            label: ariaLabel.slice(0, 80),
+            visibleText: visibleText.slice(0, 80),
+            message: 'aria-label matches visible text exactly — redundant but not harmful',
+          })
+        }
+      })
+
+      return issues
+    })()
+
     const landmarks = {
       main: doc.querySelectorAll('main, [role="main"]').length,
       nav: doc.querySelectorAll('nav, [role="navigation"]').length,
@@ -442,12 +509,13 @@ function runAudit(scanLabel) {
       smallTargetCount: smallTargets.length,
       typographyIssueCount: typographyIssues.length,
       reducedMotionWarning: reducedMotion.status === 'warn' ? 1 : 0,
+      ariaIssueCount: ariaIssues.filter(i => i.severity !== 'advisory').length,
       landmarks,
       elementCounts: counts,
     }
 
     cy.log(`[wcag-audit] ${scanLabel} — ${violations.length} violations — ${JSON.stringify(summary.byImpact)}`)
-    cy.task('ai:log', { type: 'wcagAudit', summary, violations, missingAlt, missingLabel, negativeFocus, positiveFocus, smallTargets, headingIssues, typographyIssues, reducedMotion })
+    cy.task('ai:log', { type: 'wcagAudit', summary, violations, missingAlt, missingLabel, negativeFocus, positiveFocus, smallTargets, headingIssues, typographyIssues, reducedMotion, ariaIssues })
   })
 
   // Remove focus highlight style before screenshot so it doesn't appear in the report image.
