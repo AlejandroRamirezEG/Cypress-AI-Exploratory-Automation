@@ -210,6 +210,7 @@ function doScanCycle(scanIndex) {
       win.__wcag_action__ = null
 
       if (action === 'scan') {
+        cy.wait(300) // guard against scanning mid-animation or mid-Angular digest
         runAudit(`scan-${scanIndex}`)
         doScanCycle(scanIndex + 1)
       }
