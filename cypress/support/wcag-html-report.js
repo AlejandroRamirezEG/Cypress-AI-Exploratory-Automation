@@ -24,14 +24,6 @@ const CSS_TABS = `
   .panel.wrap{padding-top:28px}
 `;
 
-// View-switcher: toggles between the full audit detail and the compact action items list.
-// html[data-view="actions"] activates the action view; default (omitted / "audit") shows audit.
-const CSS_VIEW = `
-  .wcag-action-view{display:none}
-  html[data-view=actions] .wcag-audit-view{display:none}
-  html[data-view=actions] .wcag-action-view{display:block}
-`;
-
 // ── settings panel ─────────────────────────────────────────────────────────────
 // Gear icon (⚙) opens this popover. Appears in the sticky tab bar for combined
 // reports and as a fixed button in the top-right for standalone reports.
@@ -47,59 +39,9 @@ const HTML_SETTINGS_BTN_FIXED = `
 
 const HTML_SETTINGS_BTN_TABBAR = `<button id="wcag-settings-btn"
   title="Report settings — press ? to toggle" aria-label="Report settings"
-  style="min-width:48px;min-height:44px;padding:0 14px;background:none;border:none;color:#64748b;
+  style="margin-left:auto;min-width:48px;min-height:44px;padding:0 14px;background:none;border:none;color:#64748b;
          font-size:20px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
          flex-shrink:0;border-bottom:3px solid transparent;margin-bottom:-2px">&#9881;</button>`;
-
-// View-switcher buttons — toggle between audit detail and action items views.
-// Fixed version sits to the left of the settings button. Tab-bar version uses margin-left:auto
-// to push itself (and the adjacent settings button) to the right of the tab row.
-const HTML_VIEW_BTN_FIXED = `
-<button id="wcag-view-btn" data-wcag-view-style="fixed"
-  title="Switch to action items view" aria-label="Toggle action items view"
-  style="position:fixed;top:10px;right:68px;z-index:200;background:#1e293b;color:#e2e8f0;
-         border:none;border-radius:10px;width:48px;height:48px;font-size:15px;cursor:pointer;
-         display:flex;align-items:center;justify-content:center;
-         box-shadow:0 2px 8px rgba(0,0,0,.25)">&#128203;</button>`;
-
-const HTML_VIEW_BTN_TABBAR = `<button id="wcag-view-btn" data-wcag-view-style="tabbar"
-  title="Switch to action items view" aria-label="Toggle action items view"
-  style="margin-left:auto;min-width:48px;min-height:44px;padding:0 16px;background:none;border:none;
-         color:#64748b;font:600 13px/1 system-ui,sans-serif;cursor:pointer;
-         display:inline-flex;align-items:center;justify-content:center;gap:6px;
-         white-space:nowrap;flex-shrink:0;border-bottom:3px solid transparent;margin-bottom:-2px">&#128203; Actions</button>`;
-
-const JS_VIEW_SWITCHER = `
-<script>
-(function(){
-  var VKEY='wcag-view',cur='audit';
-  try{cur=localStorage.getItem(VKEY)||'audit';}catch(e){}
-  function applyView(v){
-    document.documentElement.setAttribute('data-view',v);
-    cur=v;
-    var btn=document.getElementById('wcag-view-btn');
-    if(!btn)return;
-    var isAct=v==='actions';
-    var style=btn.getAttribute('data-wcag-view-style');
-    btn.title=isAct?'Switch to full audit view':'Switch to action items view';
-    btn.setAttribute('aria-pressed',String(isAct));
-    if(style==='tabbar'){
-      btn.innerHTML=isAct?'&#128203; Audit':'&#128203; Actions';
-      btn.style.color=isAct?'#1d4ed8':'#64748b';
-      btn.style.borderBottomColor=isAct?'#1d4ed8':'transparent';
-    } else {
-      btn.style.background=isAct?'#1d4ed8':'#1e293b';
-    }
-    try{localStorage.setItem(VKEY,v);}catch(e){}
-  }
-  function init(){
-    applyView(cur);
-    var btn=document.getElementById('wcag-view-btn');
-    if(btn)btn.addEventListener('click',function(){applyView(cur==='actions'?'audit':'actions');});
-  }
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
-})();
-</script>`;
 
 const HTML_SETTINGS_PANEL = `
 <div id="wcag-settings-panel" role="dialog" aria-label="Report settings" aria-modal="true"
@@ -791,6 +733,11 @@ function generateScanBody(audit, date, screenshotRelPath) {
   const missingLandmarks = ['nav', 'header', 'footer'].filter(l => !(lm[l] > 0));
   const scanNum = s.scanLabel ? parseInt(s.scanLabel.replace(/^scan-/, ''), 10) : null;
   const inventoryTotal = Object.values(ec).reduce((a, b) => a + b, 0);
+  const actionItems = buildActionItems(audit);
+  const nFixCrit = actionItems.filter(i => i.impact === 'critical').length;
+  const priorityBadge = actionItems.length === 0 ? passBadge() : nFixCrit > 0
+    ? `<span style="font-size:11px;font-weight:700;background:#fef2f2;color:#dc2626;padding:2px 9px;border-radius:10px;white-space:nowrap">${nFixCrit} critical · ${actionItems.length} total</span>`
+    : `<span style="font-size:11px;font-weight:700;background:#eff6ff;color:#1d4ed8;padding:2px 9px;border-radius:10px;white-space:nowrap">${actionItems.length} total</span>`;
 
   return `
   <!-- Header -->
@@ -833,7 +780,9 @@ function generateScanBody(audit, date, screenshotRelPath) {
     </div>
   </div>
 
-  <div class="wcag-audit-view"><div data-wcag-sections>
+  <div data-wcag-sections>
+  ${sectionWrap('priority', 'Where to Start', null, priorityBadge, false, generateActionItemsHtml(audit), actionItems.length === 0)}
+
   ${screenshotRelPath ? sectionWrap(
     'screenshot', 'Page Screenshot', null,
     `<span style="font-size:11px;font-weight:400;font-family:monospace;color:#94a3b8;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block">${esc(screenshotRelPath)}</span>`,
@@ -1161,13 +1110,8 @@ function generateScanBody(audit, date, screenshotRelPath) {
       </div>`).join('')}
     </div>`
   )}
-  </div></div>
-
-  <div class="wcag-action-view">
-  ${generateActionItemsHtml(audit)}
   </div>
 
-  <!-- Footer — always visible in both views -->
   <div style="text-align:center;padding:20px 0 4px;font-size:11px;color:#94a3b8">
     Generated by Cypress axe-core audit &nbsp;·&nbsp; ${esc(date)} &nbsp;·&nbsp;
     <a href="https://www.w3.org/WAI/WCAG21/quickref/" target="_blank" rel="noopener" style="color:#94a3b8">WCAG 2.1 Quick Reference</a>
@@ -1186,19 +1130,17 @@ function generateWcagHtml(audit, date, screenshotRelPath) {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>WCAG Report — ${esc(s.title || s.url || 'Accessibility Audit')}</title>
-  <style>${CSS_BASE}${CSS_VIEW}</style>
+  <style>${CSS_BASE}</style>
 </head>
 <body>
 <div class="wrap">
 ${generateScanBody(audit, date, screenshotRelPath)}
 </div>
-${HTML_VIEW_BTN_FIXED}
 ${HTML_SETTINGS_BTN_FIXED}
 ${HTML_SETTINGS_PANEL}
 ${JS_PREFS}
 ${JS_SETTINGS}
 ${JS_REORDER}
-${JS_VIEW_SWITCHER}
 </body>
 </html>`;
 }
@@ -1228,13 +1170,12 @@ function generateCombinedWcagHtml(scans) {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>WCAG Report — ${esc(first.title || first.url || 'Accessibility Audit')} (${scans.length} scan${scans.length !== 1 ? 's' : ''})</title>
-  <style>${CSS_BASE}${CSS_TABS}${CSS_VIEW}</style>
+  <style>${CSS_BASE}${CSS_TABS}</style>
 </head>
 <body>
 
 <div class="tab-bar">
   ${scans.map(tabBtn).join('\n  ')}
-  ${HTML_VIEW_BTN_TABBAR}
   ${HTML_SETTINGS_BTN_TABBAR}
 </div>
 
@@ -1253,7 +1194,6 @@ ${HTML_SETTINGS_PANEL}
 ${JS_PREFS}
 ${JS_SETTINGS}
 ${JS_REORDER}
-${JS_VIEW_SWITCHER}
 
 </body>
 </html>`;
