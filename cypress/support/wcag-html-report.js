@@ -12,6 +12,10 @@ const CSS_BASE = `
   details[open]>summary::after{content:' ▾'}
   details:not([open])>summary::after{content:' ▸'}
   a{color:#2563eb}
+  .wcag-card-link{cursor:pointer;transition:transform .12s ease,box-shadow .12s ease}
+  .wcag-card-link:hover{transform:translateY(-2px);box-shadow:0 4px 16px rgba(0,0,0,.14)!important}
+  .wcag-card-link:active{transform:translateY(0)}
+  .wcag-card-link:focus-visible{outline:3px solid #2563eb;outline-offset:2px}
   @media print{body{background:#fff}.wrap{padding:12px}details{break-inside:avoid}}
 `;
 
@@ -190,6 +194,30 @@ const JS_SETTINGS = `
         var open=e.key==='>';
         document.querySelectorAll('details[data-wcag-section]').forEach(function(d){d.open=open;});
       }
+      // Score card keyboard navigation (Enter / Space)
+      if(e.key==='Enter'||e.key===' '){
+        var card=document.activeElement&&document.activeElement.closest('[data-wcag-jump]');
+        if(card){e.preventDefault();jumpToSection(card.getAttribute('data-wcag-jump'),card);}
+      }
+    });
+
+    // Score card click → jump to section and auto-expand
+    function jumpToSection(key,fromEl){
+      var wrap=(fromEl||document.body).closest('.wrap')||document.querySelector('.wrap');
+      if(!wrap)return;
+      var sec=wrap.querySelector('[data-wcag-section="'+key+'"]');
+      if(!sec)return;
+      if(!sec.open)sec.open=true;
+      setTimeout(function(){
+        var bar=document.querySelector('.tab-bar');
+        var offset=(bar?bar.offsetHeight:0)+8;
+        var top=sec.getBoundingClientRect().top+window.scrollY-offset;
+        window.scrollTo({top:top,behavior:'smooth'});
+      },80);
+    }
+    document.addEventListener('click',function(e){
+      var card=e.target.closest('[data-wcag-jump]');
+      if(card)jumpToSection(card.getAttribute('data-wcag-jump'),card);
     });
   }
 
@@ -635,8 +663,11 @@ function scTags(tags) {
     .filter(Boolean).join(' · ');
 }
 
-function scoreCard(count, label, sub, color) {
-  return `<div style="flex:1;min-width:120px;background:#fff;border-radius:10px;padding:18px 20px;box-shadow:0 1px 3px rgba(0,0,0,.08);border-top:4px solid ${color}">
+function scoreCard(count, label, sub, color, targetSection) {
+  const attrs = (targetSection && count > 0)
+    ? ` class="wcag-card-link" data-wcag-jump="${esc(targetSection)}" role="button" tabindex="0" title="Jump to ${esc(label)} section"`
+    : '';
+  return `<div${attrs} style="flex:1;min-width:120px;background:#fff;border-radius:10px;padding:18px 20px;box-shadow:0 1px 3px rgba(0,0,0,.08);border-top:4px solid ${color}">
   <div style="font-size:34px;font-weight:800;color:${count === 0 ? '#22c55e' : color};line-height:1">${count}</div>
   <div style="font-weight:700;color:#0f172a;margin-top:4px;font-size:14px">${label}</div>
   <div style="font-size:11px;color:#94a3b8;margin-top:2px">${sub}</div>
@@ -831,19 +862,19 @@ function generateScanBody(audit, date, screenshotRelPath) {
   <!-- Score cards — axe severity row + heuristics row -->
   <div style="margin-bottom:28px">
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px">
-      ${scoreCard(byImpact.critical || 0, 'Critical',  'axe WCAG Failure',  '#dc2626')}
-      ${scoreCard(byImpact.serious  || 0, 'Serious',   'axe WCAG Failure',  '#ea580c')}
-      ${scoreCard(byImpact.moderate || 0, 'Moderate',  'axe WCAG Warning',  '#ca8a04')}
-      ${scoreCard(byImpact.minor    || 0, 'Minor',     'axe WCAG Advisory', '#2563eb')}
+      ${scoreCard(byImpact.critical || 0, 'Critical',  'axe WCAG Failure',  '#dc2626', 'axe-violations')}
+      ${scoreCard(byImpact.serious  || 0, 'Serious',   'axe WCAG Failure',  '#ea580c', 'axe-violations')}
+      ${scoreCard(byImpact.moderate || 0, 'Moderate',  'axe WCAG Warning',  '#ca8a04', 'axe-violations')}
+      ${scoreCard(byImpact.minor    || 0, 'Minor',     'axe WCAG Advisory', '#2563eb', 'axe-violations')}
     </div>
     <div style="display:flex;gap:12px;flex-wrap:wrap">
-      ${scoreCard(s.missingLabelCount    || 0, 'Missing Labels',  'SC 1.3.1 / 4.1.2', '#7c3aed')}
-      ${scoreCard(s.missingAltCount     || 0, 'Missing Alt',     'SC 1.1.1',          '#0891b2')}
-      ${scoreCard(s.smallTargetCount    || 0, 'Small Targets',   'SC 2.5.8 / 44px',   '#f59e0b')}
-      ${scoreCard(s.headingIssueCount   || 0, 'Heading Issues',  'SC 1.3.1 / 2.4.6',  '#8b5cf6')}
-      ${scoreCard(s.typographyIssueCount|| 0, 'Typography',      'SC 1.4.4 / size+wt', '#db2777')}
-      ${scoreCard(s.reducedMotionWarning|| 0, 'Motion Guard',    'SC 2.3.3 / best practice', '#0ea5e9')}
-      ${scoreCard(s.ariaIssueCount      || 0, 'ARIA Misuse',     'SC 4.1.2 / 1.3.1',         '#f43f5e')}
+      ${scoreCard(s.missingLabelCount    || 0, 'Missing Labels',  'SC 1.3.1 / 4.1.2',         '#7c3aed', 'missing-labels')}
+      ${scoreCard(s.missingAltCount      || 0, 'Missing Alt',     'SC 1.1.1',                  '#0891b2', 'missing-alt')}
+      ${scoreCard(s.smallTargetCount     || 0, 'Small Targets',   'SC 2.5.8 / 44px',           '#f59e0b', 'touch-targets')}
+      ${scoreCard(s.headingIssueCount    || 0, 'Heading Issues',  'SC 1.3.1 / 2.4.6',          '#8b5cf6', 'structure')}
+      ${scoreCard(s.typographyIssueCount || 0, 'Typography',      'SC 1.4.4 / size+wt',        '#db2777', 'typography')}
+      ${scoreCard(s.reducedMotionWarning || 0, 'Motion Guard',    'SC 2.3.3 / best practice',  '#0ea5e9', 'reduced-motion')}
+      ${scoreCard(s.ariaIssueCount       || 0, 'ARIA Misuse',     'SC 4.1.2 / 1.3.1',          '#f43f5e', 'aria-misuse')}
     </div>
   </div>
 
