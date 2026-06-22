@@ -253,34 +253,64 @@ const JS_SERVER = `
   function initServerMode(){
     document.querySelectorAll('[data-exclude-rule]').forEach(function(btn){
       btn.style.display='inline-flex';
+      var excluded=false;
+      function syncExcludeBtn(){
+        btn.disabled=false;
+        if(excluded){btn.textContent='✓ Excluded · Re-enable';btn.style.background='#15803d';}
+        else{btn.textContent='⊘ Exclude rule';btn.style.background='#1e293b';}
+      }
       btn.addEventListener('click',function(e){
         e.preventDefault();e.stopPropagation();
         var id=btn.getAttribute('data-exclude-rule'),card=btn.closest('details');
-        btn.disabled=true;btn.textContent='Excluding…';
-        apiPost('/api/exclude-rule',{ruleId:id},function(){
-          toast('"'+id+'" excluded — re-run scan to apply');
-          btn.textContent='✓ Excluded';btn.style.background='#15803d';
-          if(card)card.style.opacity='0.5';
-        },function(){
-          toast('Could not update config',true);
-          btn.disabled=false;btn.textContent='⊖ Exclude rule';
-        });
+        btn.disabled=true;
+        if(!excluded){
+          btn.textContent='Excluding…';
+          apiPost('/api/exclude-rule',{ruleId:id},function(){
+            excluded=true;
+            toast('"'+id+'" excluded — re-run scan to apply');
+            if(card)card.style.opacity='0.5';
+            syncExcludeBtn();
+          },function(){toast('Could not update config',true);syncExcludeBtn();});
+        }else{
+          btn.textContent='Re-enabling…';
+          apiPost('/api/include-rule',{ruleId:id},function(){
+            excluded=false;
+            toast('"'+id+'" re-enabled — re-run scan to see violations');
+            if(card)card.style.opacity='';
+            syncExcludeBtn();
+          },function(){toast('Could not update config',true);syncExcludeBtn();});
+        }
       });
     });
     document.querySelectorAll('[data-include-rule]').forEach(function(btn){
       btn.style.display='inline-flex';
+      var removed=false;
+      function syncIncludeBtn(){
+        btn.disabled=false;
+        if(removed){btn.textContent='⊘ Re-exclude';btn.style.background='#92400e';}
+        else{btn.textContent='⊕ Remove exclusion';btn.style.background='#1d4ed8';}
+      }
       btn.addEventListener('click',function(e){
         e.preventDefault();e.stopPropagation();
         var id=btn.getAttribute('data-include-rule'),row=btn.closest('[data-excluded-row]');
-        btn.disabled=true;btn.textContent='Removing…';
-        apiPost('/api/include-rule',{ruleId:id},function(){
-          toast('"'+id+'" removed — re-run scan to see violations');
-          btn.textContent='✓ Removed';btn.style.background='#1e40af';
-          if(row)row.style.opacity='0.45';
-        },function(){
-          toast('Could not update config',true);
-          btn.disabled=false;btn.textContent='⊕ Remove exclusion';
-        });
+        btn.disabled=true;
+        if(!removed){
+          btn.textContent='Removing…';
+          apiPost('/api/include-rule',{ruleId:id},function(){
+            removed=true;
+            toast('"'+id+'" removed — re-run scan to see violations');
+            if(row)row.style.opacity='0.45';
+            syncIncludeBtn();
+          },function(){toast('Could not update config',true);syncIncludeBtn();});
+        }else{
+          btn.textContent='Re-excluding…';
+          apiPost('/api/exclude-rule',{ruleId:id},function(){
+            removed=false;
+            toast('"'+id+'" re-excluded — re-run scan to apply');
+            if(row)row.style.opacity='';
+            syncIncludeBtn();
+          },function(){toast('Could not update config',true);syncIncludeBtn();});
+        }
       });
     });
   }
@@ -781,7 +811,7 @@ function violationCard(v) {
     <div style="display:flex;justify-content:flex-end;margin-top:10px;padding-top:8px;border-top:1px solid rgba(0,0,0,.06)">
       <button data-exclude-rule="${esc(v.id)}"
         style="display:none;align-items:center;gap:5px;padding:5px 12px;background:#1e293b;color:#f8fafc;border:none;border-radius:6px;font:600 11px system-ui,sans-serif;cursor:pointer;letter-spacing:.3px">
-        &#8856; Exclude rule
+        ⊘ Exclude rule
       </button>
     </div>
   </div>
