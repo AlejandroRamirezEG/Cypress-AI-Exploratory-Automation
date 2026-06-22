@@ -258,8 +258,56 @@ const JS_REORDER = `
 
   function initDnd(){
     var dragging=null,mouseOnHandle=false;
+    var _scrollRaf=null,_scrollSpeed=0;
+    function scrollStep(){
+      if(_scrollSpeed!==0)window.scrollBy(0,_scrollSpeed);
+      _scrollRaf=requestAnimationFrame(scrollStep);
+    }
+    function startAutoScroll(){if(!_scrollRaf)_scrollRaf=requestAnimationFrame(scrollStep);}
+    function stopAutoScroll(){if(_scrollRaf){cancelAnimationFrame(_scrollRaf);_scrollRaf=null;}_scrollSpeed=0;}
+    // Insert dragging before the sibling whose midpoint is below the cursor, or append.
+    // Skips the DOM write if position has not changed.
+    function liveSortAt(e,c){
+      if(!dragging||dragging.parentNode!==c)return;
+      var sibs=sectionsIn(c).filter(function(s){return s!==dragging;});
+      if(!sibs.length)return;
+      var before=null;
+      for(var i=0;i<sibs.length;i++){
+        var r=sibs[i].getBoundingClientRect();
+        if(e.clientY<r.top+r.height/2){before=sibs[i];break;}
+      }
+      if(before){
+        if(dragging.nextElementSibling!==before)c.insertBefore(dragging,before);
+      } else {
+        var all=sectionsIn(c);
+        if(all[all.length-1]!==dragging)c.appendChild(dragging);
+      }
+    }
+    document.addEventListener('dragover',function(e){
+      if(!dragging)return;
+      var ZONE=80,MAX=18,y=e.clientY,h=window.innerHeight;
+      if(y<ZONE){_scrollSpeed=-(MAX*(1-(y/ZONE)));startAutoScroll();}
+      else if(y>h-ZONE){_scrollSpeed=MAX*((y-(h-ZONE))/ZONE);startAutoScroll();}
+      else{stopAutoScroll();}
+      // Clamp when cursor exits the container
+      var c=dragging.parentNode;if(!c)return;
+      var cr=c.getBoundingClientRect(),sibs=sectionsIn(c).filter(function(s){return s!==dragging;});
+      if(!sibs.length)return;
+      if(y<cr.top){
+        if(c.firstElementChild!==dragging)c.insertBefore(dragging,sibs[0]);
+      } else if(y>cr.bottom){
+        var all=sectionsIn(c);if(all[all.length-1]!==dragging)c.appendChild(dragging);
+      }
+    });
     document.addEventListener('mouseup',function(){mouseOnHandle=false;});
     containers().forEach(function(c){
+      // Handles cursor in empty space inside the container (below last section, padding area)
+      c.addEventListener('dragover',function(e){
+        e.preventDefault();
+        if(!dragging||dragging.parentNode!==c)return;
+        liveSortAt(e,c);
+      });
+      c.addEventListener('drop',function(e){e.preventDefault();});
       sectionsIn(c).forEach(function(section){
         section.setAttribute('draggable','true');
         var h=section.querySelector('.wcag-drag-handle');
@@ -267,32 +315,44 @@ const JS_REORDER = `
         section.addEventListener('dragstart',function(e){
           if(!mouseOnHandle){e.preventDefault();return;}
           dragging=section;
-          setTimeout(function(){section.style.opacity='0.4';},0);
+          // Build a summary clone as the drag ghost: append to DOM first so the browser
+          // can snapshot it, then remove after setDragImage (setTimeout 0 defers removal
+          // until after the browser has captured the image).
+          var sm=section.querySelector('summary'),r=section.getBoundingClientRect();
+          if(sm){
+            var clone=sm.cloneNode(true);
+            clone.style.cssText='position:fixed;top:-9999px;left:0;width:'+Math.round(r.width)+'px;'+
+              'padding:14px 20px;box-sizing:border-box;background:#fff;border-radius:10px;overflow:hidden;'+
+              'box-shadow:0 8px 28px rgba(0,0,0,.22),0 0 0 2px #2563eb;'+
+              'display:flex;align-items:center;gap:10px;flex-wrap:wrap;list-style:none';
+            document.body.appendChild(clone);
+            e.dataTransfer.setDragImage(clone,28,Math.round(clone.offsetHeight/2));
+            setTimeout(function(){clone.remove();},0);
+          }
+          setTimeout(function(){
+            section.style.opacity='0.4';
+            sectionsIn(c).forEach(function(s){
+              if(s!==section)s.style.boxShadow='0 0 0 2px #93c5fd,0 1px 3px rgba(0,0,0,.08)';
+            });
+          },0);
           e.dataTransfer.effectAllowed='move';
         });
         section.addEventListener('dragend',function(){
           section.style.opacity='';
-          sectionsIn(c).forEach(function(s){s.style.outline='';s.style.outlineOffset='';});
+          sectionsIn(c).forEach(function(s){
+            s.style.boxShadow='0 1px 3px rgba(0,0,0,.08)';
+          });
           if(dragging){syncOtherPanels(c);saveOrder();}
           dragging=null;
+          stopAutoScroll();
         });
         section.addEventListener('dragover',function(e){
           e.preventDefault();
-          if(!dragging||dragging===section||dragging.parentNode!==c)return;
+          if(!dragging||dragging.parentNode!==c)return;
           e.dataTransfer.dropEffect='move';
-          sectionsIn(c).forEach(function(s){s.style.outline='';s.style.outlineOffset='';});
-          section.style.outline='2px dashed #2563eb';section.style.outlineOffset='2px';
+          liveSortAt(e,c);
         });
-        section.addEventListener('dragleave',function(e){
-          if(!section.contains(e.relatedTarget)){section.style.outline='';section.style.outlineOffset='';}
-        });
-        section.addEventListener('drop',function(e){
-          e.preventDefault();
-          sectionsIn(c).forEach(function(s){s.style.outline='';s.style.outlineOffset='';});
-          if(!dragging||dragging===section||dragging.parentNode!==c)return;
-          var all=sectionsIn(c),fi=all.indexOf(dragging),ti=all.indexOf(section);
-          if(fi<ti)c.insertBefore(dragging,section.nextSibling);else c.insertBefore(dragging,section);
-        });
+        section.addEventListener('drop',function(e){e.preventDefault();});
       });
     });
   }
