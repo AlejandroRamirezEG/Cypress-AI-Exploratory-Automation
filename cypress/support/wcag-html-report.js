@@ -204,13 +204,20 @@ const JS_PREFS = `
 (function(){
   var KEY='wcag-section-prefs',prefs={};
   try{prefs=JSON.parse(localStorage.getItem(KEY)||'{}');}catch(e){}
+  var syncing=false;
   function init(){
     document.querySelectorAll('details[data-wcag-section]').forEach(function(d){
       var k=d.getAttribute('data-wcag-section');
       if(k in prefs)d.open=prefs[k];
       d.addEventListener('toggle',function(){
+        if(syncing)return;
         prefs[k]=d.open;
         try{localStorage.setItem(KEY,JSON.stringify(prefs));}catch(e){}
+        syncing=true;
+        document.querySelectorAll('details[data-wcag-section="'+k+'"]').forEach(function(o){
+          if(o!==d)o.open=d.open;
+        });
+        syncing=false;
       });
     });
   }
