@@ -225,6 +225,77 @@ const JS_SETTINGS = `
 })();
 </script>`;
 
+// Server-mode detection and rule exclusion UI.
+// On page load, tries fetch('/api/health'). If the report server responds, enters
+// server mode: shows ⊘ Exclude buttons on violation cards and ⊕ Remove buttons on
+// excluded-rule rows. Both actions POST to the server which writes cypress.env.json.
+// In file:// mode the health check fails silently — buttons stay hidden, no degradation.
+const JS_SERVER = `
+<script>
+(function(){
+  if(typeof fetch==='undefined')return;
+  function toast(msg,err){
+    var d=document.createElement('div');
+    d.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);'+
+      'background:'+(err?'#991b1b':'#1e293b')+';color:#fff;padding:10px 20px;'+
+      'border-radius:8px;font:600 13px/1.4 system-ui,sans-serif;'+
+      'z-index:99999;box-shadow:0 4px 16px rgba(0,0,0,.3);pointer-events:none;'+
+      'white-space:nowrap;max-width:90vw;overflow:hidden;text-overflow:ellipsis';
+    d.textContent=msg;document.body.appendChild(d);
+    setTimeout(function(){d.style.cssText+=';transition:opacity .3s;opacity:0';setTimeout(function(){d.remove();},350);},2700);
+  }
+  function apiPost(url,body,ok,fail){
+    fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+      .then(function(r){return r.json();})
+      .then(function(d){d&&d.ok?ok(d):fail&&fail();})
+      .catch(function(){fail&&fail();});
+  }
+  function initServerMode(){
+    document.querySelectorAll('[data-exclude-rule]').forEach(function(btn){
+      btn.style.display='inline-flex';
+      btn.addEventListener('click',function(e){
+        e.preventDefault();e.stopPropagation();
+        var id=btn.getAttribute('data-exclude-rule'),card=btn.closest('details');
+        btn.disabled=true;btn.textContent='Excluding…';
+        apiPost('/api/exclude-rule',{ruleId:id},function(){
+          toast('"'+id+'" excluded — re-run scan to apply');
+          btn.textContent='✓ Excluded';btn.style.background='#15803d';
+          if(card)card.style.opacity='0.5';
+        },function(){
+          toast('Could not update config',true);
+          btn.disabled=false;btn.textContent='⊖ Exclude rule';
+        });
+      });
+    });
+    document.querySelectorAll('[data-include-rule]').forEach(function(btn){
+      btn.style.display='inline-flex';
+      btn.addEventListener('click',function(e){
+        e.preventDefault();e.stopPropagation();
+        var id=btn.getAttribute('data-include-rule'),row=btn.closest('[data-excluded-row]');
+        btn.disabled=true;btn.textContent='Removing…';
+        apiPost('/api/include-rule',{ruleId:id},function(){
+          toast('"'+id+'" removed — re-run scan to see violations');
+          btn.textContent='✓ Removed';btn.style.background='#1e40af';
+          if(row)row.style.opacity='0.45';
+        },function(){
+          toast('Could not update config',true);
+          btn.disabled=false;btn.textContent='⊕ Remove exclusion';
+        });
+      });
+    });
+  }
+  var ctrl=typeof AbortController!=='undefined'?new AbortController():null;
+  var tid=ctrl?setTimeout(function(){ctrl.abort();},700):null;
+  fetch('/api/health',ctrl?{signal:ctrl.signal}:{})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      clearTimeout(tid);
+      if(d&&d.ok){if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',initServerMode);}else{initServerMode();}}
+    })
+    .catch(function(){clearTimeout(tid);});
+})();
+</script>`;
+
 // Settings state persists in localStorage['wcag-settings'].
 // Section collapse state persists separately in localStorage['wcag-section-prefs'].
 const JS_PREFS = `
@@ -707,6 +778,12 @@ function violationCard(v) {
     <a href="${esc(v.helpUrl)}" target="_blank" rel="noopener"
        style="display:inline-block;margin-bottom:14px;font-size:13px;color:#2563eb;font-weight:600;text-decoration:none">Learn how to fix &#8594;</a>
     ${(v.nodes || []).map(nodeBlock).join('')}
+    <div style="display:flex;justify-content:flex-end;margin-top:10px;padding-top:8px;border-top:1px solid rgba(0,0,0,.06)">
+      <button data-exclude-rule="${esc(v.id)}"
+        style="display:none;align-items:center;gap:5px;padding:5px 12px;background:#1e293b;color:#f8fafc;border:none;border-radius:6px;font:600 11px system-ui,sans-serif;cursor:pointer;letter-spacing:.3px">
+        &#8856; Exclude rule
+      </button>
+    </div>
   </div>
 </details>`;
 }
@@ -823,7 +900,7 @@ function sectionWrap(key, title, scRef, badge, isOpen, content, passing) {
 // ── single-scan body (no html/head/body wrapper) ──────────────────────────────
 
 function generateScanBody(audit, date, screenshotRelPath) {
-  const { summary: s = {}, violations = [], missingAlt = [], missingLabel = [], negativeFocus = [], positiveFocus = [], smallTargets = [], headingIssues = [], typographyIssues = [], reducedMotion = {}, ariaIssues = [] } = audit;
+  const { summary: s = {}, violations = [], missingAlt = [], missingLabel = [], negativeFocus = [], positiveFocus = [], smallTargets = [], headingIssues = [], typographyIssues = [], reducedMotion = {}, ariaIssues = [], excludedViolations = [] } = audit;
   const byImpact = s.byImpact || {};
   const lm = s.landmarks || {};
   const ec = s.elementCounts || {};
@@ -1197,6 +1274,47 @@ function generateScanBody(audit, date, screenshotRelPath) {
     missingLandmarks.length === 0
   )}
 
+  ${excludedViolations.length ? sectionWrap(
+    'excluded-rules',
+    `${excludedViolations.length} Rule${excludedViolations.length !== 1 ? 's' : ''} Excluded from This Scan`,
+    null,
+    `<span style="font-size:11px;font-weight:700;background:#fef3c7;color:#92400e;padding:2px 9px;border-radius:10px;white-space:nowrap">&#9888; ${excludedViolations.length} excluded</span>`,
+    false,
+    `<p style="font-size:13px;color:#64748b;margin:8px 0 16px">
+      These violations were found but suppressed via <code>WCAG_IGNORE_RULES</code> in <code>cypress.env.json</code>.
+      They are not counted in the totals above. Click <strong>Remove exclusion</strong> to re-enable a rule on the next scan
+      (requires the report to be opened via <code>pnpm serve:report</code> or auto-launched after a scan).
+    </p>
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr style="background:#fef3c7;border-bottom:2px solid #fde68a">
+        <th style="padding:8px 10px;text-align:left;font-size:11px;color:#92400e;text-transform:uppercase;letter-spacing:.4px">Rule ID</th>
+        <th style="padding:8px 10px;text-align:left;font-size:11px;color:#92400e;text-transform:uppercase;letter-spacing:.4px">Description</th>
+        <th style="padding:8px 10px;text-align:left;font-size:11px;color:#92400e;text-transform:uppercase;letter-spacing:.4px">WCAG</th>
+        <th style="padding:8px 10px;text-align:center;font-size:11px;color:#92400e;text-transform:uppercase;letter-spacing:.4px">Nodes</th>
+        <th style="padding:8px 10px;text-align:left;font-size:11px;color:#92400e;text-transform:uppercase;letter-spacing:.4px;min-width:150px">Action</th>
+      </tr></thead>
+      <tbody>${excludedViolations.map(v => {
+        const c = IMPACT[v.impact] || IMPACT.minor;
+        const sc = scTags(v.wcag);
+        return `<tr data-excluded-row>
+          <td style="padding:8px 10px;border-bottom:1px solid #fef3c7;white-space:nowrap">
+            <code style="font-size:12px;font-weight:700;color:#0f172a">${esc(v.id)}</code>&nbsp;${chip(v.impact)}
+          </td>
+          <td style="padding:8px 10px;border-bottom:1px solid #fef3c7;font-size:12px;color:#334155;max-width:280px">${esc(v.help || '')}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #fef3c7;font-size:11px;color:#64748b;white-space:nowrap">${sc || '—'}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #fef3c7;font-size:12px;text-align:center;font-weight:700;color:${c.chip}">${v.nodeCount}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #fef3c7">
+            <button data-include-rule="${esc(v.id)}"
+              style="display:none;align-items:center;gap:5px;padding:5px 11px;background:#1d4ed8;color:#fff;border:none;border-radius:6px;font:600 11px system-ui,sans-serif;cursor:pointer;white-space:nowrap">
+              &#8853; Remove exclusion
+            </button>
+          </td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`,
+    false
+  ) : ''}
+
   ${sectionWrap(
     'inventory', 'Element Inventory', null,
     `<span style="font-size:11px;font-weight:500;color:#94a3b8;white-space:nowrap">${inventoryTotal} total</span>`,
@@ -1239,6 +1357,7 @@ ${HTML_SETTINGS_PANEL}
 ${JS_PREFS}
 ${JS_SETTINGS}
 ${JS_REORDER}
+${JS_SERVER}
 </body>
 </html>`;
 }
@@ -1292,6 +1411,7 @@ ${HTML_SETTINGS_PANEL}
 ${JS_PREFS}
 ${JS_SETTINGS}
 ${JS_REORDER}
+${JS_SERVER}
 
 </body>
 </html>`;

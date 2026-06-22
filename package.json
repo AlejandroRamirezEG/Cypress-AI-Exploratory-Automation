@@ -14,7 +14,8 @@
     "test:ai_interactive": "cypress open --e2e --env WCAG_INTERACTIVE=true",
     "test:ai_interactive_boxes": "cypress open --e2e --env WCAG_INTERACTIVE=true,WCAG_HIGHLIGHT_BOXES=true",
     "test:all": "npm run cy:run",
-    "clean:reports": "node scripts/clean-reports.js"
+    "clean:reports": "node scripts/clean-reports.js",
+    "serve:report": "node scripts/serve-report.js"
   },
   "keywords": [
     "cypress",

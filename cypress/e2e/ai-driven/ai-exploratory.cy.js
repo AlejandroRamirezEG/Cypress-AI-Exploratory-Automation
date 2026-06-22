@@ -33,6 +33,15 @@ const SESSION_ID = Cypress.env('SESSION_ID') || 'no-session'
 const HIGHLIGHT_BOXES    = !!Cypress.env('WCAG_HIGHLIGHT_BOXES')
 const FAIL_ON_CRITICAL   = !!Cypress.env('WCAG_FAIL_ON_CRITICAL')
 
+// Rule IDs to suppress from axe results. Set via WCAG_IGNORE_RULES in cypress.env.json.
+// Cypress auto-merges cypress.env.json into Cypress.env() at startup.
+const IGNORE_RULES = (() => {
+  const raw = Cypress.env('WCAG_IGNORE_RULES')
+  if (Array.isArray(raw)) return raw
+  if (typeof raw === 'string') return raw.split(',').map(s => s.trim()).filter(Boolean)
+  return []
+})()
+
 const IMPACT_LABEL = {
   critical: 'WCAG Failure — Critical',
   serious: 'WCAG Failure — Serious',
@@ -230,12 +239,22 @@ function runAudit(scanLabel) {
 
   // violations[] is captured in this call's closure. cy.document() below runs
   // after cy.checkA11y() completes, so the array is fully populated by then.
+  // excludedViolations[] captures rules suppressed by WCAG_IGNORE_RULES so the
+  // report can show them in a collapsed footnote section.
   const violations = []
+  const excludedViolations = []
   cy.checkA11y(
     null,
     { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'best-practice'] } },
     (axeViolations) => {
       axeViolations.forEach(v => {
+        if (IGNORE_RULES.includes(v.id)) {
+          excludedViolations.push({
+            id: v.id, impact: v.impact, help: v.help, helpUrl: v.helpUrl,
+            wcag: v.tags.filter(t => t.startsWith('wcag')), nodeCount: v.nodes.length,
+          })
+          return
+        }
         violations.push({
           id: v.id,
           impact: v.impact,
@@ -514,12 +533,13 @@ function runAudit(scanLabel) {
       typographyIssueCount: typographyIssues.length,
       reducedMotionWarning: reducedMotion.status === 'warn' ? 1 : 0,
       ariaIssueCount: ariaIssues.filter(i => i.severity !== 'advisory').length,
+      excludedRuleCount: excludedViolations.length,
       landmarks,
       elementCounts: counts,
     }
 
     cy.log(`[wcag-audit] ${scanLabel} — ${violations.length} violations — ${JSON.stringify(summary.byImpact)}`)
-    cy.task('ai:log', { type: 'wcagAudit', summary, violations, missingAlt, missingLabel, negativeFocus, positiveFocus, smallTargets, headingIssues, typographyIssues, reducedMotion, ariaIssues })
+    cy.task('ai:log', { type: 'wcagAudit', summary, violations, excludedViolations, missingAlt, missingLabel, negativeFocus, positiveFocus, smallTargets, headingIssues, typographyIssues, reducedMotion, ariaIssues })
   })
 
   // Remove focus highlight style before screenshot so it doesn't appear in the report image.

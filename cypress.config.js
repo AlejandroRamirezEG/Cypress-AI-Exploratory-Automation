@@ -1,8 +1,39 @@
 const fs = require('fs');
 const path = require('path');
+const net = require('net');
+const { spawn, exec } = require('child_process');
 const { generateWcagHtml, generateCombinedWcagHtml, generateActionItemsMd } = require('./cypress/support/wcag-html-report');
 
 const { defineConfig } = require('cypress');
+
+// Tracks whether the report server has been launched for this Cypress process.
+// Module-level so it persists across all task() calls within one Cypress launch.
+let serverLaunched = false;
+
+function isPortFree(port) {
+  return new Promise(resolve => {
+    const sock = new net.Socket();
+    const done = free => { try { sock.destroy(); } catch {} resolve(free); };
+    sock.setTimeout(300);
+    sock.once('connect', () => done(false));
+    sock.once('error', () => done(true));
+    sock.once('timeout', () => done(true));
+    sock.connect(port, '127.0.0.1');
+  });
+}
+
+function launchReportServer() {
+  const script = path.join(__dirname, 'scripts', 'serve-report.js');
+  const child = spawn(process.execPath, [script, '--no-open'], { detached: true, stdio: 'ignore' });
+  child.unref();
+}
+
+function openBrowser(url) {
+  const cmd = process.platform === 'win32' ? `start "" "${url}"`
+    : process.platform === 'darwin' ? `open "${url}"`
+    : `xdg-open "${url}"`;
+  exec(cmd, err => { if (err) console.error('[wcag] browser open failed:', err.message); });
+}
 
 // Walk `baseDir` recursively and return the most-recently-modified file whose
 // full path (forward-slash normalized) matches `pathRe`.
@@ -174,6 +205,22 @@ module.exports = defineConfig({
             }));
             const latestFile = path.join(INSIGHTS_DIR, 'latest.html');
             fs.writeFileSync(latestFile, generateCombinedWcagHtml(scansForLatest));
+
+            // Auto-launch report server and open browser on the first scan of this session.
+            // Fire-and-forget: task returns immediately; server spawns in background.
+            // Port check: if 4444 is already taken (previous session), skip spawn but still
+            // open the browser — latest.html has already been overwritten above.
+            if (!serverLaunched) {
+              serverLaunched = true;
+              isPortFree(4444).then(free => {
+                if (free) {
+                  launchReportServer();
+                  setTimeout(() => openBrowser('http://localhost:4444/latest.html'), 800);
+                } else {
+                  openBrowser('http://localhost:4444/latest.html');
+                }
+              }).catch(() => {});
+            }
 
             return { path: outFile, latestPath: latestFile, scanCount: scans.length };
           } catch (err) {
