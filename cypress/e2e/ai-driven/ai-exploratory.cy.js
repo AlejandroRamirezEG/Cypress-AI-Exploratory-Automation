@@ -17,6 +17,8 @@
 //    WCAG_INTERACTIVE=true         enable interactive mode (set by test:ai_interactive)
 //    WCAG_SCAN_TIMEOUT=<ms>        how long to wait for a button click before timing out
 //                                  (default: 600000 = 10 min per cycle)
+//    WCAG_AXE_TIMEOUT=<ms>         axe.run() internal timeout (default: 30000 = 30s); doubles
+//                                  automatically on each timeout failure, capped at 120s
 //    BASE_URL=<url>                page to audit
 //    WCAG_FAIL_ON_CRITICAL=true    CI gate: fail the test if any critical axe violation is found
 //                                  (automated mode only; interactive mode always collects without failing)
@@ -30,8 +32,15 @@ const SCAN_WAIT_MS = parseInt(Cypress.env('WCAG_SCAN_TIMEOUT') || String(10 * 60
 // Injected by setupNodeEvents at Cypress launch — groups all output for this session.
 const SESSION_ID = Cypress.env('SESSION_ID') || 'no-session'
 
-const HIGHLIGHT_BOXES    = !!Cypress.env('WCAG_HIGHLIGHT_BOXES')
-const FAIL_ON_CRITICAL   = !!Cypress.env('WCAG_FAIL_ON_CRITICAL')
+const HIGHLIGHT_BOXES = !!Cypress.env('WCAG_HIGHLIGHT_BOXES')
+const FAIL_ON_CRITICAL = !!Cypress.env('WCAG_FAIL_ON_CRITICAL')
+
+// axe.run() timeout — doubles on each timeout failure, capped at 120 s.
+// preload:false (set in cy.checkA11y options) suppresses the cross-origin
+// font-CDN XHR fetches that are the primary cause of >4 s timeouts on
+// content-heavy pages (axe fetches every @font-face source to inspect CSS rules).
+const AXE_TIMEOUT_BASE = parseInt(Cypress.env('WCAG_AXE_TIMEOUT') || '30000', 10)
+let _axeTimeoutMs = AXE_TIMEOUT_BASE
 
 // Rule IDs to suppress from axe results. Set via WCAG_IGNORE_RULES in cypress.env.json.
 // Cypress auto-merges cypress.env.json into Cypress.env() at startup.
@@ -51,9 +60,9 @@ const IMPACT_LABEL = {
 
 const HIGHLIGHT_COLORS = {
   critical: '#dc2626',
-  serious:  '#ea580c',
+  serious: '#ea580c',
   moderate: '#d97706',
-  minor:    '#2563eb',
+  minor: '#2563eb',
 }
 
 // ── interactive controls (injected into the AUT, not the Cypress runner) ─────
@@ -62,6 +71,10 @@ let _barPosition = 'top' // persists across scan cycles
 
 function injectScanControls(win, scanIndex) {
   const doc = win.document
+
+  // Consume failure flag written by the axe timeout handler.
+  const prevScanFailed = !!win.__wcag_scan_failed__
+  if (prevScanFailed) win.__wcag_scan_failed__ = null
 
   // Remove any controls left from a previous cycle (bar or pill).
   const existing = doc.getElementById('__wcag_controls__')
@@ -86,6 +99,7 @@ function injectScanControls(win, scanIndex) {
     ].join(';'))
   }
   applyBarStyle()
+  if (prevScanFailed) bar.style.background = '#b45309'
 
   const msg = doc.createElement('span')
   msg.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'
@@ -97,8 +111,8 @@ function injectScanControls(win, scanIndex) {
   const GHOST = 'border:1px solid rgba(255,255,255,.3);border-radius:4px;padding:5px 10px;font:700 12px system-ui,sans-serif;cursor:pointer;white-space:nowrap;flex-shrink:0;background:rgba(255,255,255,.1);color:#fff'
 
   const scanBtn = doc.createElement('button')
-  scanBtn.textContent = '🔍 Scan'
-  scanBtn.setAttribute('style', `${SOLID};background:#2563eb;color:#fff`)
+  scanBtn.textContent = prevScanFailed ? '🔄 Retry Scan' : '🔍 Scan'
+  scanBtn.setAttribute('style', `${SOLID};background:${prevScanFailed ? '#b45309' : '#2563eb'};color:#fff`)
   scanBtn.addEventListener('click', () => { bar.remove(); win.__wcag_action__ = 'scan' })
 
   const doneBtn = doc.createElement('button')
@@ -112,7 +126,7 @@ function injectScanControls(win, scanIndex) {
   // State is derived from the DOM so it survives bar re-injection between cycles.
   let focusActive = !!doc.getElementById('__wcag_focus_style__')
   const focusBtn = doc.createElement('button')
-  const FOCUS_ON_MSG  = '👁 Focus active — Tab through the page.'
+  const FOCUS_ON_MSG = '👁 Focus active — Tab through the page.'
   const FOCUS_OUT_MSG = '⚠ Focus left the page — click anywhere on the page to restore it.'
   function syncFocusBtn() {
     focusBtn.textContent = '👁 Focus'
@@ -123,12 +137,17 @@ function injectScanControls(win, scanIndex) {
   }
   syncFocusBtn()
   const normalMsg = msg.textContent
+
+  if (prevScanFailed) {
+    msg.textContent = `⚠ Scan timed out — click 🔄 Retry Scan to try again (axe timeout now ${_axeTimeoutMs / 1000}s), or navigate to a simpler page state.`
+  }
+
   if (focusActive) msg.textContent = FOCUS_ON_MSG
 
   // window blur/focus tell us when the tester tabs out of the AUT into the
   // Cypress runner — show a contextual nudge only at that moment.
-  const onWinBlur  = () => { if (!focusActive) return; msg.textContent = FOCUS_OUT_MSG; bar.style.background = '#b45309' }
-  const onWinFocus = () => { if (!focusActive) return; msg.textContent = FOCUS_ON_MSG;  applyBarStyle() }
+  const onWinBlur = () => { if (!focusActive) return; msg.textContent = FOCUS_OUT_MSG; bar.style.background = '#b45309' }
+  const onWinFocus = () => { if (!focusActive) return; msg.textContent = FOCUS_ON_MSG; applyBarStyle() }
   if (focusActive) { win.addEventListener('blur', onWinBlur); win.addEventListener('focus', onWinFocus) }
 
   focusBtn.addEventListener('click', () => {
@@ -233,9 +252,29 @@ function doScanCycle(scanIndex) {
 // ── shared audit logic ────────────────────────────────────────────────────────
 
 function runAudit(scanLabel) {
+  let scanTimedOut = false
+
   // Re-inject axe each scan — the page may have navigated or Angular may have
   // re-bootstrapped since the previous scan.
   cy.injectAxe()
+
+  const isAxeTimeoutLike = (e) => {
+    const m = String(e && e.message ? e.message : e)
+    return (
+      m.includes('cy.then() timed out') ||
+      m.includes('never resolved') ||
+      m.toLowerCase().includes('timed out')
+    )
+  }
+
+  cy.once('fail', (err) => {
+    if (!isAxeTimeoutLike(err)) return err // rethrow non-timeouts
+    scanTimedOut = true
+    _axeTimeoutMs = Math.min(_axeTimeoutMs * 2, 120000)
+    cy.window().then(win => { win.__wcag_scan_failed__ = true })
+    cy.log(`[wcag-audit] ${scanLabel} — axe timed out; retry will allow ${_axeTimeoutMs / 1000}s`)
+    return false
+  })
 
   // violations[] is captured in this call's closure. cy.document() below runs
   // after cy.checkA11y() completes, so the array is fully populated by then.
@@ -243,9 +282,21 @@ function runAudit(scanLabel) {
   // report can show them in a collapsed footnote section.
   const violations = []
   const excludedViolations = []
+
+  // Extend Cypress's defaultCommandTimeout so axe.run()'s internal Promise is
+  // allowed the full _axeTimeoutMs budget instead of the 4 s default.
+  // preload:false suppresses cross-origin font-CDN XHR requests (axe fetches
+  // every @font-face stylesheet reference by default, producing 100+ requests
+  // on content-heavy pages and reliably breaching the 4 s threshold).
+  const savedCmdTimeout = Cypress.config('defaultCommandTimeout')
+  cy.then(() => { Cypress.config('defaultCommandTimeout', _axeTimeoutMs) })
+
   cy.checkA11y(
     null,
-    { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'best-practice'] } },
+    {
+      runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'best-practice'] },
+      preload: false,
+    },
     (axeViolations) => {
       axeViolations.forEach(v => {
         if (IGNORE_RULES.includes(v.id)) {
@@ -274,6 +325,8 @@ function runAudit(scanLabel) {
     },
     true // do not fail the test — collect and log only
   )
+
+  cy.then(() => { Cypress.config('defaultCommandTimeout', savedCmdTimeout) })
 
   cy.document().then(doc => {
     const counts = {
@@ -375,12 +428,12 @@ function runAudit(scanLabel) {
           if (cs.display === 'none' || cs.visibility === 'hidden') return null
           const rect = el.getBoundingClientRect()
           if (!rect.width || !rect.height) return null
-          const fontSize   = parseFloat(cs.fontSize)
+          const fontSize = parseFloat(cs.fontSize)
           const fontWeight = parseInt(cs.fontWeight, 10)
           if (!fontSize) return null
           const severity = fontSize < 12 ? 'fail'
             : (fontSize < 16 && fontWeight <= 300) ? 'warn'
-            : null
+              : null
           if (!severity) return null
           const text = (el.textContent || el.getAttribute('aria-label') || '')
             .trim().replace(/\s+/g, ' ').slice(0, 60)
@@ -418,7 +471,7 @@ function runAudit(scanLabel) {
                   const t = inner.style.getPropertyValue('transition') || ''
                   if ((a && a !== 'none') || (t && t !== 'none')) hasAnimation = true
                 })
-              } catch {}
+              } catch { }
             } else if (rule.style) {
               const a = rule.style.getPropertyValue('animation') || rule.style.getPropertyValue('animation-name') || ''
               const t = rule.style.getPropertyValue('transition') || ''
@@ -426,7 +479,7 @@ function runAudit(scanLabel) {
             }
           }
         }
-      } catch {}
+      } catch { }
       const status = !hasAnimation ? 'pass' : hasReducedMotionQuery ? 'pass' : 'warn'
       return { hasAnimation, hasReducedMotionQuery, keyframeCount, status }
     })()
@@ -456,10 +509,10 @@ function runAudit(scanLabel) {
       // 2. Role conflicts with native element semantics
       const ROLE_CONFLICTS = [
         { sel: 'button[role]', nativeRole: 'button', badRoles: ['link', 'menuitem', 'option', 'none', 'presentation'] },
-        { sel: 'a[href][role]', nativeRole: 'link',   badRoles: ['presentation', 'none'] },
+        { sel: 'a[href][role]', nativeRole: 'link', badRoles: ['presentation', 'none'] },
         { sel: 'h1[role],h2[role],h3[role],h4[role],h5[role],h6[role]', nativeRole: 'heading', badRoles: ['presentation', 'none'] },
         { sel: 'input[type="checkbox"][role]', nativeRole: 'checkbox', badRoles: ['button', 'link'] },
-        { sel: 'input[type="radio"][role]',    nativeRole: 'radio',    badRoles: ['button', 'link'] },
+        { sel: 'input[type="radio"][role]', nativeRole: 'radio', badRoles: ['button', 'link'] },
       ]
       ROLE_CONFLICTS.forEach(({ sel, nativeRole, badRoles }) => {
         Array.from(doc.querySelectorAll(sel)).slice(0, 20).forEach(el => {
@@ -583,7 +636,7 @@ function runAudit(scanLabel) {
             lbl.textContent = v.id
             ov.appendChild(lbl)
             doc.body.appendChild(ov)
-          } catch (_) {}
+          } catch (_) { }
         })
       })
     })
@@ -643,6 +696,10 @@ function runAudit(scanLabel) {
       ).to.equal(0)
     })
   }
+
+  // Reset axe timeout to baseline after a successful scan so transient slowness
+  // on one page doesn't permanently inflate the budget for subsequent scans.
+  cy.then(() => { if (!scanTimedOut) _axeTimeoutMs = AXE_TIMEOUT_BASE })
 }
 
 // ── spec ─────────────────────────────────────────────────────────────────────
