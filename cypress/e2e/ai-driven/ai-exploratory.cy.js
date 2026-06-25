@@ -16,7 +16,7 @@
 //  Env vars:
 //    WCAG_INTERACTIVE=true         enable interactive mode (set by test:ai_interactive)
 //    WCAG_SCAN_TIMEOUT=<ms>        how long to wait for a button click before timing out
-//                                  (default: 600000 = 10 min per cycle)
+//                                  (default: 600000 = 10 min per cycle; 0 = wait indefinitely)
 //    WCAG_AXE_TIMEOUT=<ms>         axe.run() internal timeout (default: 30000 = 30s); doubles
 //                                  automatically on each timeout failure, capped at 120s
 //    BASE_URL=<url>                page to audit
@@ -28,7 +28,10 @@
 
 const TARGET_URL = Cypress.env('BASE_URL') || Cypress.config('baseUrl') || 'https://www.saucedemo.com'
 const INTERACTIVE = !!Cypress.env('WCAG_INTERACTIVE')
-const SCAN_WAIT_MS = parseInt(Cypress.env('WCAG_SCAN_TIMEOUT') || String(10 * 60 * 1000), 10)
+const _SCAN_TIMEOUT_RAW = Cypress.env('WCAG_SCAN_TIMEOUT')
+const SCAN_WAIT_MS = (_SCAN_TIMEOUT_RAW === '0' || _SCAN_TIMEOUT_RAW === 0)
+  ? Number.MAX_SAFE_INTEGER // indefinite — deadline is ~285 million years from now
+  : parseInt(_SCAN_TIMEOUT_RAW || String(10 * 60 * 1000), 10)
 // Injected by setupNodeEvents at Cypress launch — groups all output for this session.
 const SESSION_ID = Cypress.env('SESSION_ID') || 'no-session'
 
@@ -234,6 +237,7 @@ function doScanCycle(scanIndex) {
   cy.log(`[wcag-audit] cycle ${scanIndex} — click 🔍 Scan to audit, ✓ Done to finish`)
 
   // Poll until either button is clicked. Timeout is per-cycle (default 10 min).
+  // WCAG_SCAN_TIMEOUT=0 sets SCAN_WAIT_MS to Number.MAX_SAFE_INTEGER — effectively indefinite.
   cy.window({ timeout: SCAN_WAIT_MS })
     .should(win => { expect(win.__wcag_action__).to.be.oneOf(['scan', 'done']) })
     .then(win => {
