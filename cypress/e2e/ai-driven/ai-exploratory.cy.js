@@ -239,7 +239,22 @@ function doScanCycle(scanIndex) {
   // Poll until either button is clicked. Timeout is per-cycle (default 10 min).
   // WCAG_SCAN_TIMEOUT=0 sets SCAN_WAIT_MS to Number.MAX_SAFE_INTEGER — effectively indefinite.
   cy.window({ timeout: SCAN_WAIT_MS })
-    .should(win => { expect(win.__wcag_action__).to.be.oneOf(['scan', 'done']) })
+    .should(win => {
+      // Re-inject the control bar if a page navigation (e.g. login redirect) removed it.
+      // injectScanControls is idempotent — it removes any existing bar before adding a new one,
+      // so calling it here is safe even though .should() retries rapidly.
+      const doc = win.document
+      const barMissing = !doc.getElementById('__wcag_controls__') && !doc.getElementById('__wcag_pill__')
+      const actionPending = win.__wcag_action__ === 'scan' || win.__wcag_action__ === 'done'
+      // The click handler removes the bar before setting __wcag_action__, so barMissing
+      // can be true at the moment the action fires. Only re-inject when no action is pending —
+      // otherwise we'd overwrite the signal with null right as the assertion is about to pass.
+      if (barMissing && doc.body && !actionPending) {
+        win.__wcag_action__ = null
+        injectScanControls(win, scanIndex)
+      }
+      expect(win.__wcag_action__).to.be.oneOf(['scan', 'done'])
+    })
     .then(win => {
       const action = win.__wcag_action__
       win.__wcag_action__ = null
