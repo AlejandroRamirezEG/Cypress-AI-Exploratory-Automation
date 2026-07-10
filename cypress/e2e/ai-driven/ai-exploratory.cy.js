@@ -22,6 +22,14 @@
 //    BASE_URL=<url>                page to audit
 //    WCAG_FAIL_ON_CRITICAL=true    CI gate: fail the test if any critical axe violation is found
 //                                  (automated mode only; interactive mode always collects without failing)
+//    WCAG_AUTH_TOKEN               token written into localStorage before the app boots, for
+//                                  pages that need auth but aren't reachable via a login redirect
+//    WCAG_AUTH_TOKEN_KEY           localStorage key WCAG_AUTH_TOKEN is written under (required
+//                                  alongside WCAG_AUTH_TOKEN)
+//    WCAG_LOGIN_URL                interactive-mode-only fallback when no WCAG_AUTH_TOKEN is set:
+//                                  visits this login page first so the tester can sign in through
+//                                  the real UI, then use the control bar's 🔗 field to jump to
+//                                  BASE_URL once authenticated
 //
 //  Output per scan: reports/ai-insights/wcag-report-scan-<n>.html
 //                   reports/ai-insights/latest-report.json  (all scans appended)
@@ -54,6 +62,12 @@ const IGNORE_RULES = (() => {
   return []
 })()
 
+// Optional auth seeding — see header comment for WCAG_AUTH_TOKEN / WCAG_AUTH_TOKEN_KEY / WCAG_LOGIN_URL.
+const AUTH_TOKEN = Cypress.env('WCAG_AUTH_TOKEN') || null
+const AUTH_TOKEN_KEY = Cypress.env('WCAG_AUTH_TOKEN_KEY') || null
+const LOGIN_URL = Cypress.env('WCAG_LOGIN_URL') || null
+const HAS_STATIC_TOKEN = !!(AUTH_TOKEN && AUTH_TOKEN_KEY)
+
 const IMPACT_LABEL = {
   critical: 'WCAG Failure — Critical',
   serious: 'WCAG Failure — Serious',
@@ -72,7 +86,69 @@ const HIGHLIGHT_COLORS = {
 
 let _barPosition = 'top' // persists across scan cycles
 
+// Navigates the given frame to rawUrl, forcing a hard reload when the destination
+// only differs by hash. A hash-only change is same-document per spec — browsers
+// never reload for it, so it's just a live in-app route swap within the *already
+// running* app instance, and any state a fresh boot sets up (auth guards, feature
+// flags, view-specific bootstrapping) never runs. A real top-level navigation —
+// whether typed into an address bar or an app's own target="_top" link — always
+// gets a full reload, so this forces the same here for parity.
+function navigateWithinFrame(win, rawUrl) {
+  let target
+  try { target = new win.URL(rawUrl, win.location.href) }
+  catch { return /* invalid input — leave location as-is */ }
+  const hashOnly = target.origin === win.location.origin
+    && target.pathname === win.location.pathname
+    && target.search === win.location.search
+  win.location.href = target.href
+  if (hashOnly) win.location.reload()
+}
+
+// Cypress only controls the one iframe it renders the AUT in. window.open() and
+// anchors targeting _top/_parent/_blank normally escape to the top of the WHOLE
+// frame tree — but inside Cypress that "top" is the Cypress Runner's own window,
+// not the AUT's. A same-origin iframe the app embeds itself (e.g. an "embed mode"
+// re-render of the same app for a widget) adds another level: from inside it,
+// native _top means "the Cypress Runner," two levels up, not the AUT's own root
+// document one level up — the app never intends that; in a real (non-Cypress) tab
+// _top from that iframe would land on the AUT's own root, since that root IS the
+// browser tab. rootWin pins down what "the AUT's own root" means as the guard
+// recurses into nested iframes, so every escape attempt — no matter which frame it
+// fires from — lands on that one root instead of drifting up to Cypress's Runner
+// (the original bug) or getting stuck re-rendering inside the nested iframe (which
+// showed up as a duplicated app shell/logo, since the iframe would boot a second
+// full instance of the app in place rather than the click ever leaving it).
+// Installed on the given document (and, best-effort, any same-origin iframes already
+// inside it) — guarded by a flag so re-injection on an unchanged document is a no-op,
+// but a fresh document (full reload, or a nested iframe that just loaded) gets it installed.
+function installNavigationGuard(win, rootWin = win) {
+  if (!win || win.__wcag_nav_guard_installed__) return
+  win.__wcag_nav_guard_installed__ = true
+
+  const nativeOpen = win.open
+  win.open = function (url) {
+    if (url) navigateWithinFrame(rootWin, url)
+    return null
+  }
+  win.__wcag_native_open__ = nativeOpen
+
+  win.document.addEventListener('click', (e) => {
+    const link = e.target && e.target.closest && e.target.closest('a[target]')
+    if (!link) return
+    const target = link.getAttribute('target')
+    if ((target === '_top' || target === '_parent' || target === '_blank') && link.href) {
+      e.preventDefault()
+      navigateWithinFrame(rootWin, link.href)
+    }
+  }, true)
+
+  Array.from(win.document.querySelectorAll('iframe')).forEach(frame => {
+    try { installNavigationGuard(frame.contentWindow, rootWin) } catch { /* cross-origin — cannot reach it */ }
+  })
+}
+
 function injectScanControls(win, scanIndex) {
+  installNavigationGuard(win)
   const doc = win.document
 
   // Consume failure flag written by the axe timeout handler.
@@ -174,6 +250,39 @@ function injectScanControls(win, scanIndex) {
     syncFocusBtn()
   })
 
+  // 🔗 — reveal an inline URL field so the tester can jump straight to a page that
+  // isn't reachable via the app's own navigation (e.g. a hidden report route).
+  // Pure client-side win.location navigation — no new win.__wcag_action__ value;
+  // the bar-missing re-injection check below restores the bar on the destination
+  // page exactly as it already does after a login redirect.
+  const urlInput = doc.createElement('input')
+  urlInput.type = 'text'
+  urlInput.placeholder = 'https://... or #/route'
+  urlInput.setAttribute('style', 'display:none;width:220px;padding:4px 6px;border-radius:4px;border:1px solid rgba(255,255,255,.3);background:#0f172a;color:#fff;font:600 12px system-ui,sans-serif;flex-shrink:0')
+
+  const goBtn = doc.createElement('button')
+  goBtn.textContent = 'Go'
+  goBtn.setAttribute('style', `${GHOST};display:none`)
+
+  function navigateToTypedUrl() {
+    const raw = urlInput.value.trim()
+    if (!raw) return
+    navigateWithinFrame(win, raw)
+  }
+  goBtn.addEventListener('click', navigateToTypedUrl)
+  urlInput.addEventListener('keydown', e => { if (e.key === 'Enter') navigateToTypedUrl() })
+
+  const urlBtn = doc.createElement('button')
+  urlBtn.textContent = '🔗'
+  urlBtn.title = "Go to a specific URL (for pages not linked in the app's own nav)"
+  urlBtn.setAttribute('style', GHOST)
+  urlBtn.addEventListener('click', () => {
+    const show = urlInput.style.display === 'none'
+    urlInput.style.display = show ? 'inline-block' : 'none'
+    goBtn.style.display = show ? 'inline-block' : 'none'
+    if (show) urlInput.focus()
+  })
+
   // ↑ / ↓ — move bar to opposite edge
   const moveBtn = doc.createElement('button')
   moveBtn.setAttribute('style', GHOST)
@@ -215,6 +324,9 @@ function injectScanControls(win, scanIndex) {
   bar.appendChild(msg)
   bar.appendChild(scanBtn)
   bar.appendChild(focusBtn)
+  bar.appendChild(urlBtn)
+  bar.appendChild(urlInput)
+  bar.appendChild(goBtn)
   bar.appendChild(moveBtn)
   bar.appendChild(hideBtn)
   bar.appendChild(doneBtn)
@@ -725,7 +837,18 @@ function runAudit(scanLabel) {
 
 describe('AI Exploratory — WCAG 2.1 AA Accessibility Audit', () => {
   it('WCAG audit', function () {
-    cy.visit(TARGET_URL, { failOnStatusCode: false })
+    // If no static token is available, interactive mode can fall back to a real login
+    // page — the tester signs in through the actual UI, then uses the control bar's
+    // 🔗 field to jump to BASE_URL once authenticated. Automated mode has no one to
+    // fill the form, so it always targets BASE_URL directly.
+    const initialUrl = (!HAS_STATIC_TOKEN && INTERACTIVE && LOGIN_URL) ? LOGIN_URL : TARGET_URL
+
+    cy.visit(initialUrl, {
+      failOnStatusCode: false,
+      onBeforeLoad(win) {
+        if (HAS_STATIC_TOKEN) win.localStorage.setItem(AUTH_TOKEN_KEY, AUTH_TOKEN)
+      },
+    })
 
     // FAILURE HERE → Angular didn't boot within 20s; check BASE_URL and network access.
     cy.get('input, ion-input, ion-select, select, textarea, button, ion-button', { timeout: 20000 })
