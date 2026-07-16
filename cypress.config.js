@@ -10,6 +10,23 @@ const { defineConfig } = require('cypress');
 // Module-level so it persists across all task() calls within one Cypress launch.
 let serverLaunched = false;
 
+// Cached axe-core source text, read once per Cypress launch and handed to the spec
+// via the ai:axeSource task so it can inject axe-core into same-origin report iframes
+// (cy.injectAxe() only loads it into the top AUT window). axe-core isn't a direct
+// dependency of this project — only a transitive one of cypress-axe — so under pnpm's
+// strict node_modules layout, a plain require.resolve('axe-core/...') from here would
+// fail (phantom-dependency protection). Resolving relative to cypress-axe's own
+// directory walks pnpm's per-package node_modules correctly regardless of axe-core's
+// exact installed version.
+let _axeCoreSourceCache = null;
+function getAxeCoreSource() {
+  if (_axeCoreSourceCache) return _axeCoreSourceCache;
+  const cypressAxeDir = path.dirname(require.resolve('cypress-axe/package.json'));
+  const axeCorePath = require.resolve('axe-core/axe.min.js', { paths: [cypressAxeDir] });
+  _axeCoreSourceCache = fs.readFileSync(axeCorePath, 'utf8');
+  return _axeCoreSourceCache;
+}
+
 function isPortFree(port) {
   return new Promise(resolve => {
     const sock = new net.Socket();
@@ -260,6 +277,14 @@ module.exports = defineConfig({
             const res = await fetch(href, { method: 'HEAD', redirect: 'follow', signal: controller.signal });
             clearTimeout(timeout);
             return { status: res.status };
+          } catch (err) {
+            return { error: String(err) };
+          }
+        },
+
+        'ai:axeSource'() {
+          try {
+            return { source: getAxeCoreSource() };
           } catch (err) {
             return { error: String(err) };
           }

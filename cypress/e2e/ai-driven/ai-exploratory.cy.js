@@ -86,6 +86,297 @@ const HIGHLIGHT_COLORS = {
 
 let _barPosition = 'top' // persists across scan cycles
 
+// Cached axe-core source, fetched once per Cypress launch via the ai:axeSource task
+// (see cypress.config.js) and reused for every same-origin report iframe encountered.
+let _axeSourceCache = null
+
+// Depth-first walk collecting every reachable same-origin iframe document under `doc`
+// (including iframes nested inside other iframes). Cross-origin iframes throw on
+// .contentDocument access and are skipped — nothing we can do about those from here.
+function collectFrameDocs(doc) {
+  const frameDocs = []
+  const walk = d => {
+    Array.from(d.querySelectorAll('iframe')).forEach(frame => {
+      try {
+        const fd = frame.contentDocument
+        if (fd && fd.body) { frameDocs.push(fd); walk(fd) }
+      } catch { /* cross-origin — cannot reach it */ }
+    })
+  }
+  walk(doc)
+  return frameDocs
+}
+
+// axe-core only audits frames it has actually been loaded into. cy.injectAxe() loads
+// it into the top AUT window only — legacy report pages that render their content in
+// a same-origin iframe (e.g. this app's path3-crm embed) never get it, so axe's
+// cross-frame handshake silently times out and that iframe's content is dropped from
+// results with no error, even though axe.run() at the top still "succeeds" and returns
+// only the shell's violations. Loading axe-core into every reachable same-origin iframe
+// here lets the axe.run() call in runAudit() auto-merge their violations into the same
+// results array, exactly like it already does for the top document — no separate
+// axe.run() call per frame needed.
+function injectAxeIntoReportFrames(topDoc, source) {
+  if (!source) return
+  collectFrameDocs(topDoc).forEach(fd => {
+    const fw = fd.defaultView
+    if (!fw || fw.axe) return // no window, or axe-core already present
+    try { fw.eval(source) } catch { /* CSP blocking eval, or injection failed — skip this frame */ }
+  })
+}
+
+// Runs all custom DOM-heuristic checks (these complement axe, which only covers
+// axe-core's own rule set) against a single document. Called once for the top AUT
+// document and once per same-origin report iframe (collectFrameDocs) so a report's
+// own content — not just the shell page wrapping it — gets audited, not just scanned
+// visually. Each check is self-contained per document on purpose: e.g. heading-level
+// issues are about one document's own hierarchy, so merging heading *arrays* across
+// documents before checking would produce false "level-skip" issues between an outer
+// shell's heading and an unrelated iframe's heading.
+function collectHeuristics(doc) {
+  const counts = {
+    inputs: doc.querySelectorAll('input').length,
+    textareas: doc.querySelectorAll('textarea').length,
+    selects: doc.querySelectorAll('select').length,
+    ionInputs: doc.querySelectorAll('ion-input').length,
+    ionSelects: doc.querySelectorAll('ion-select').length,
+    ionChecks: doc.querySelectorAll('ion-checkbox').length,
+    ionRadios: doc.querySelectorAll('ion-radio').length,
+    buttons: doc.querySelectorAll('button, ion-button').length,
+    links: doc.querySelectorAll('a[href]').length,
+    images: doc.querySelectorAll('img').length,
+    forms: doc.querySelectorAll('form').length,
+  }
+
+  const missingAlt = Array.from(doc.querySelectorAll('img'))
+    .filter(img => !(img.getAttribute('alt') || '').trim())
+    .map(img => ({ src: img.src || null, classes: img.className || null }))
+
+  const missingLabel = Array.from(doc.querySelectorAll('input:not([type="hidden"]), textarea, select'))
+    .filter(inp => {
+      const hasLabel = inp.id && doc.querySelector(`label[for="${inp.id}"]`)
+      const hasAria = inp.getAttribute('aria-label') || inp.getAttribute('aria-labelledby')
+      return !hasLabel && !hasAria
+    })
+    .map((inp, idx) => {
+      const classes = (inp.className || '').trim().split(/\s+/).filter(c => c && !c.startsWith('ng-')).slice(0, 3).join(' ')
+      return {
+        tag: inp.tagName.toLowerCase(),
+        type: inp.getAttribute('type') || null,
+        name: inp.getAttribute('name') || null,
+        id: inp.id || null,
+        placeholder: inp.getAttribute('placeholder') || null,
+        formcontrolname: inp.getAttribute('formcontrolname') || null,
+        ariaDescribedby: inp.getAttribute('aria-describedby') || null,
+        classSnippet: classes || null,
+        domIndex: idx,
+      }
+    })
+
+  const negativeFocus = Array.from(doc.querySelectorAll('[tabindex="-1"]'))
+    .filter(el => ['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName))
+    .map(el => ({
+      tag: el.tagName.toLowerCase(),
+      text: (el.textContent || '').trim().slice(0, 80),
+    }))
+
+  const positiveFocus = Array.from(doc.querySelectorAll('[tabindex]'))
+    .filter(el => parseInt(el.getAttribute('tabindex'), 10) > 0)
+    .map(el => ({
+      tag: el.tagName.toLowerCase(),
+      tabindex: parseInt(el.getAttribute('tabindex'), 10),
+      text: (el.textContent || el.getAttribute('aria-label') || '').trim().slice(0, 80),
+    }))
+
+  const headingIssues = (() => {
+    const headings = Array.from(doc.querySelectorAll('h1,h2,h3,h4,h5,h6')).map(el => ({
+      level: parseInt(el.tagName[1], 10),
+      text: (el.textContent || '').trim().slice(0, 80),
+    }))
+    const issues = []
+    const h1Count = headings.filter(h => h.level === 1).length
+    if (h1Count === 0) issues.push({ type: 'missing-h1', message: 'No h1 found on the page', level: null, text: null })
+    if (h1Count > 1) issues.push({ type: 'multiple-h1', message: `${h1Count} h1 elements found — only one expected`, level: null, text: null })
+    for (let i = 1; i < headings.length; i++) {
+      const prev = headings[i - 1]
+      const curr = headings[i]
+      if (curr.level > prev.level + 1) {
+        issues.push({ type: 'level-skip', message: `h${prev.level} → h${curr.level} skips a level`, level: curr.level, text: curr.text })
+      }
+    }
+    return issues
+  })()
+
+  const smallTargets = Array.from(
+    doc.querySelectorAll('button, a[href], [role="button"], ion-button, input:not([type="hidden"]), ion-input')
+  )
+    .map(el => {
+      const rect = el.getBoundingClientRect()
+      const w = Math.round(rect.width)
+      const h = Math.round(rect.height)
+      const text = (el.textContent || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '').trim().slice(0, 60)
+      return { tag: el.tagName.toLowerCase(), text, w, h, severity: (w < 24 || h < 24) ? 'fail' : 'warn' }
+    })
+    .filter(({ w, h }) => (w > 0 || h > 0) && (w < 44 || h < 44))
+
+  // Typography: flag tiny text (< 12 px, fail) and thin-weight small text
+  // (< 16 px at weight ≤ 300, warn) — common Ionic anti-pattern.
+  // Scoped to visible text-bearing elements; skips zero-size and hidden nodes.
+  const typographyIssues = (() => {
+    const dv = doc.defaultView
+    if (!dv) return []
+    return Array.from(doc.querySelectorAll(
+      'button, a[href], label, p, h1, h2, h3, h4, h5, h6, ion-button, ion-label'
+    ))
+      .map(el => {
+        const cs = dv.getComputedStyle(el)
+        if (cs.display === 'none' || cs.visibility === 'hidden') return null
+        const rect = el.getBoundingClientRect()
+        if (!rect.width || !rect.height) return null
+        const fontSize = parseFloat(cs.fontSize)
+        const fontWeight = parseInt(cs.fontWeight, 10)
+        if (!fontSize) return null
+        const severity = fontSize < 12 ? 'fail'
+          : (fontSize < 16 && fontWeight <= 300) ? 'warn'
+            : null
+        if (!severity) return null
+        const text = (el.textContent || el.getAttribute('aria-label') || '')
+          .trim().replace(/\s+/g, ' ').slice(0, 60)
+        if (!text) return null
+        return { tag: el.tagName.toLowerCase(), text, fontSize: Math.round(fontSize * 10) / 10, fontWeight, severity }
+      })
+      .filter(Boolean)
+  })()
+
+  // Prefers-reduced-motion: scan stylesheets for @keyframes / animation / transition
+  // declarations and check for a corresponding @media (prefers-reduced-motion) guard.
+  // Cross-origin sheets silently skip (SecurityError on cssRules access).
+  const reducedMotion = (() => {
+    let hasAnimation = false
+    let hasReducedMotionQuery = false
+    let keyframeCount = 0
+    try {
+      const sheets = Array.from(doc.styleSheets)
+      for (const sheet of sheets) {
+        let rules
+        try { rules = Array.from(sheet.cssRules || []) } catch { continue }
+        for (const rule of rules) {
+          if (rule instanceof CSSKeyframesRule) {
+            keyframeCount++
+            hasAnimation = true
+          } else if (rule instanceof CSSMediaRule) {
+            const media = rule.conditionText || (rule.media && rule.media.mediaText) || ''
+            if (/prefers-reduced-motion/i.test(media)) {
+              hasReducedMotionQuery = true
+            }
+            try {
+              Array.from(rule.cssRules || []).forEach(inner => {
+                if (!inner.style) return
+                const a = inner.style.getPropertyValue('animation') || inner.style.getPropertyValue('animation-name') || ''
+                const t = inner.style.getPropertyValue('transition') || ''
+                if ((a && a !== 'none') || (t && t !== 'none')) hasAnimation = true
+              })
+            } catch { }
+          } else if (rule.style) {
+            const a = rule.style.getPropertyValue('animation') || rule.style.getPropertyValue('animation-name') || ''
+            const t = rule.style.getPropertyValue('transition') || ''
+            if ((a && a !== 'none') || (t && t !== 'none')) hasAnimation = true
+          }
+        }
+      }
+    } catch { }
+    const status = !hasAnimation ? 'pass' : hasReducedMotionQuery ? 'pass' : 'warn'
+    return { hasAnimation, hasReducedMotionQuery, keyframeCount, status }
+  })()
+
+  // ARIA misuse: three heuristic checks that complement axe's ARIA rules.
+  const ariaIssues = (() => {
+    const issues = []
+    const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
+    // 1. aria-hidden="true" containing focusable children (WCAG SC 4.1.2 / 1.3.1)
+    Array.from(doc.querySelectorAll('[aria-hidden="true"]'))
+      .filter(el => el.querySelector(FOCUSABLE))
+      .slice(0, 10)
+      .forEach(el => {
+        const n = el.querySelectorAll(FOCUSABLE).length
+        issues.push({
+          type: 'aria-hidden-focusable',
+          severity: 'error',
+          tag: el.tagName.toLowerCase(),
+          role: el.getAttribute('role') || null,
+          label: el.getAttribute('aria-label') || null,
+          visibleText: (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80),
+          message: `aria-hidden="true" conceals ${n} focusable child${n !== 1 ? 'ren' : ''} from assistive technology`,
+        })
+      })
+
+    // 2. Role conflicts with native element semantics
+    const ROLE_CONFLICTS = [
+      { sel: 'button[role]', nativeRole: 'button', badRoles: ['link', 'menuitem', 'option', 'none', 'presentation'] },
+      { sel: 'a[href][role]', nativeRole: 'link', badRoles: ['presentation', 'none'] },
+      { sel: 'h1[role],h2[role],h3[role],h4[role],h5[role],h6[role]', nativeRole: 'heading', badRoles: ['presentation', 'none'] },
+      { sel: 'input[type="checkbox"][role]', nativeRole: 'checkbox', badRoles: ['button', 'link'] },
+      { sel: 'input[type="radio"][role]', nativeRole: 'radio', badRoles: ['button', 'link'] },
+    ]
+    ROLE_CONFLICTS.forEach(({ sel, nativeRole, badRoles }) => {
+      Array.from(doc.querySelectorAll(sel)).slice(0, 20).forEach(el => {
+        const role = (el.getAttribute('role') || '').trim().toLowerCase()
+        if (!badRoles.includes(role)) return
+        issues.push({
+          type: 'conflicting-role',
+          severity: 'warning',
+          tag: el.tagName.toLowerCase(),
+          role,
+          label: el.getAttribute('aria-label') || null,
+          visibleText: (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80),
+          message: `Native role "${nativeRole}" overridden by role="${role}" — may confuse assistive technology`,
+        })
+      })
+    })
+
+    // 3. aria-label identical to visible text (redundant, advisory only)
+    Array.from(doc.querySelectorAll('[aria-label]')).slice(0, 50).forEach(el => {
+      const ariaLabel = (el.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ')
+      const visibleText = (el.textContent || '').trim().replace(/\s+/g, ' ')
+      if (!ariaLabel || !visibleText) return
+      if (ariaLabel.toLowerCase() === visibleText.toLowerCase()) {
+        issues.push({
+          type: 'redundant-label',
+          severity: 'advisory',
+          tag: el.tagName.toLowerCase(),
+          role: el.getAttribute('role') || null,
+          label: ariaLabel.slice(0, 80),
+          visibleText: visibleText.slice(0, 80),
+          message: 'aria-label matches visible text exactly — redundant but not harmful',
+        })
+      }
+    })
+
+    return issues
+  })()
+
+  const landmarks = {
+    main: doc.querySelectorAll('main, [role="main"]').length,
+    nav: doc.querySelectorAll('nav, [role="navigation"]').length,
+    header: doc.querySelectorAll('header, [role="banner"]').length,
+    footer: doc.querySelectorAll('footer, [role="contentinfo"]').length,
+  }
+
+  // Best-effort page heading: try semantic/ARIA headings first, then Ionic's ion-title.
+  // Each querySelector is safe on non-Ionic pages — returns null if absent.
+  let pageHeading = null
+  for (const sel of ['h1', 'ion-title', '[role="heading"][aria-level="1"]', 'h2']) {
+    const el = doc.querySelector(sel)
+    if (el) {
+      const text = (el.textContent || '').trim().replace(/\s+/g, ' ')
+      if (text) { pageHeading = text; break }
+    }
+  }
+
+  return { counts, missingAlt, missingLabel, negativeFocus, positiveFocus, headingIssues, smallTargets, typographyIssues, reducedMotion, ariaIssues, landmarks, pageHeading }
+}
+
 // Navigates the given frame to rawUrl, forcing a hard reload when the destination
 // only differs by hash. A hash-only change is same-document per spec — browsers
 // never reload for it, so it's just a live in-app route swap within the *already
@@ -142,9 +433,37 @@ function installNavigationGuard(win, rootWin = win) {
     }
   }, true)
 
-  Array.from(win.document.querySelectorAll('iframe')).forEach(frame => {
+  const guardFrame = frame => {
     try { installNavigationGuard(frame.contentWindow, rootWin) } catch { /* cross-origin — cannot reach it */ }
+  }
+
+  // Cover same-origin iframes already in the DOM at install time...
+  Array.from(win.document.querySelectorAll('iframe')).forEach(guardFrame)
+
+  // ...and any inserted afterwards. Some report viewers (e.g. this app's legacy
+  // path3-crm embed) lazy-load their iframe well after this page's own guard already
+  // ran — a same-page insertion like that never replaces the outer document, so
+  // barMissing never fires and injectScanControls is never called again to rediscover
+  // it. Without this observer, a click inside that iframe (target="_blank"/window.open)
+  // stays unguarded indefinitely and escapes straight past Cypress into the Runner's
+  // own top window. contentWindow exists (as about:blank) the instant the element is
+  // inserted, so we also try immediately — but a same-origin navigation swaps in a new
+  // Window object the guard flag doesn't carry over to, so the 'load' listener re-tries
+  // once the real document lands.
+  const guardNewFrames = root => {
+    const frames = root.tagName === 'IFRAME' ? [root] : Array.from(root.querySelectorAll('iframe'))
+    frames.forEach(frame => {
+      guardFrame(frame)
+      frame.addEventListener('load', () => guardFrame(frame))
+    })
+  }
+  const observer = new win.MutationObserver(mutations => {
+    mutations.forEach(m => {
+      m.addedNodes.forEach(node => { if (node.nodeType === 1) guardNewFrames(node) })
+    })
   })
+  observer.observe(win.document.documentElement, { childList: true, subtree: true })
+  win.__wcag_nav_observer__ = observer
 }
 
 function injectScanControls(win, scanIndex) {
@@ -389,6 +708,22 @@ function runAudit(scanLabel) {
   // re-bootstrapped since the previous scan.
   cy.injectAxe()
 
+  // Load axe-core into any same-origin report iframe on the page too — see
+  // injectAxeIntoReportFrames() above for why this is necessary.
+  cy.then(() => {
+    if (_axeSourceCache) return _axeSourceCache
+    return cy.task('ai:axeSource', null, { log: false }).then(result => {
+      if (result.error) {
+        cy.log(`[wcag-audit] ${scanLabel} — axe-core source load failed, iframe content will not be audited: ${result.error}`)
+        return null
+      }
+      _axeSourceCache = result.source
+      return result.source
+    })
+  }).then(source => {
+    cy.document().then(doc => injectAxeIntoReportFrames(doc, source))
+  })
+
   const isAxeTimeoutLike = (e) => {
     const m = String(e && e.message ? e.message : e)
     return (
@@ -459,250 +794,41 @@ function runAudit(scanLabel) {
 
   cy.then(() => { Cypress.config('defaultCommandTimeout', savedCmdTimeout) })
 
-  cy.document().then(doc => {
-    const counts = {
-      inputs: doc.querySelectorAll('input').length,
-      textareas: doc.querySelectorAll('textarea').length,
-      selects: doc.querySelectorAll('select').length,
-      ionInputs: doc.querySelectorAll('ion-input').length,
-      ionSelects: doc.querySelectorAll('ion-select').length,
-      ionChecks: doc.querySelectorAll('ion-checkbox').length,
-      ionRadios: doc.querySelectorAll('ion-radio').length,
-      buttons: doc.querySelectorAll('button, ion-button').length,
-      links: doc.querySelectorAll('a[href]').length,
-      images: doc.querySelectorAll('img').length,
-      forms: doc.querySelectorAll('form').length,
-    }
+  cy.document().then(topDoc => {
+    // Merge heuristics across the top document and any same-origin report iframes —
+    // otherwise a report reached via the app's own nav (rendered inside an iframe) gets
+    // audited as if it were just the surrounding CRM shell, same blind spot as axe's.
+    const perDoc = [topDoc, ...collectFrameDocs(topDoc)].map(collectHeuristics)
 
-    const missingAlt = Array.from(doc.querySelectorAll('img'))
-      .filter(img => !(img.getAttribute('alt') || '').trim())
-      .map(img => ({ src: img.src || null, classes: img.className || null }))
-
-    const missingLabel = Array.from(doc.querySelectorAll('input:not([type="hidden"]), textarea, select'))
-      .filter(inp => {
-        const hasLabel = inp.id && doc.querySelector(`label[for="${inp.id}"]`)
-        const hasAria = inp.getAttribute('aria-label') || inp.getAttribute('aria-labelledby')
-        return !hasLabel && !hasAria
-      })
-      .map((inp, idx) => {
-        const classes = (inp.className || '').trim().split(/\s+/).filter(c => c && !c.startsWith('ng-')).slice(0, 3).join(' ')
-        return {
-          tag: inp.tagName.toLowerCase(),
-          type: inp.getAttribute('type') || null,
-          name: inp.getAttribute('name') || null,
-          id: inp.id || null,
-          placeholder: inp.getAttribute('placeholder') || null,
-          formcontrolname: inp.getAttribute('formcontrolname') || null,
-          ariaDescribedby: inp.getAttribute('aria-describedby') || null,
-          classSnippet: classes || null,
-          domIndex: idx,
-        }
-      })
-
-    const negativeFocus = Array.from(doc.querySelectorAll('[tabindex="-1"]'))
-      .filter(el => ['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName))
-      .map(el => ({
-        tag: el.tagName.toLowerCase(),
-        text: (el.textContent || '').trim().slice(0, 80),
-      }))
-
-    const positiveFocus = Array.from(doc.querySelectorAll('[tabindex]'))
-      .filter(el => parseInt(el.getAttribute('tabindex'), 10) > 0)
-      .map(el => ({
-        tag: el.tagName.toLowerCase(),
-        tabindex: parseInt(el.getAttribute('tabindex'), 10),
-        text: (el.textContent || el.getAttribute('aria-label') || '').trim().slice(0, 80),
-      }))
-
-    const headingIssues = (() => {
-      const headings = Array.from(doc.querySelectorAll('h1,h2,h3,h4,h5,h6')).map(el => ({
-        level: parseInt(el.tagName[1], 10),
-        text: (el.textContent || '').trim().slice(0, 80),
-      }))
-      const issues = []
-      const h1Count = headings.filter(h => h.level === 1).length
-      if (h1Count === 0) issues.push({ type: 'missing-h1', message: 'No h1 found on the page', level: null, text: null })
-      if (h1Count > 1) issues.push({ type: 'multiple-h1', message: `${h1Count} h1 elements found — only one expected`, level: null, text: null })
-      for (let i = 1; i < headings.length; i++) {
-        const prev = headings[i - 1]
-        const curr = headings[i]
-        if (curr.level > prev.level + 1) {
-          issues.push({ type: 'level-skip', message: `h${prev.level} → h${curr.level} skips a level`, level: curr.level, text: curr.text })
-        }
-      }
-      return issues
-    })()
-
-    const smallTargets = Array.from(
-      doc.querySelectorAll('button, a[href], [role="button"], ion-button, input:not([type="hidden"]), ion-input')
-    )
-      .map(el => {
-        const rect = el.getBoundingClientRect()
-        const w = Math.round(rect.width)
-        const h = Math.round(rect.height)
-        const text = (el.textContent || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '').trim().slice(0, 60)
-        return { tag: el.tagName.toLowerCase(), text, w, h, severity: (w < 24 || h < 24) ? 'fail' : 'warn' }
-      })
-      .filter(({ w, h }) => (w > 0 || h > 0) && (w < 44 || h < 44))
-
-    // Typography: flag tiny text (< 12 px, fail) and thin-weight small text
-    // (< 16 px at weight ≤ 300, warn) — common Ionic anti-pattern.
-    // Scoped to visible text-bearing elements; skips zero-size and hidden nodes.
-    const typographyIssues = (() => {
-      const dv = doc.defaultView
-      if (!dv) return []
-      return Array.from(doc.querySelectorAll(
-        'button, a[href], label, p, h1, h2, h3, h4, h5, h6, ion-button, ion-label'
-      ))
-        .map(el => {
-          const cs = dv.getComputedStyle(el)
-          if (cs.display === 'none' || cs.visibility === 'hidden') return null
-          const rect = el.getBoundingClientRect()
-          if (!rect.width || !rect.height) return null
-          const fontSize = parseFloat(cs.fontSize)
-          const fontWeight = parseInt(cs.fontWeight, 10)
-          if (!fontSize) return null
-          const severity = fontSize < 12 ? 'fail'
-            : (fontSize < 16 && fontWeight <= 300) ? 'warn'
-              : null
-          if (!severity) return null
-          const text = (el.textContent || el.getAttribute('aria-label') || '')
-            .trim().replace(/\s+/g, ' ').slice(0, 60)
-          if (!text) return null
-          return { tag: el.tagName.toLowerCase(), text, fontSize: Math.round(fontSize * 10) / 10, fontWeight, severity }
-        })
-        .filter(Boolean)
-    })()
-
-    // Prefers-reduced-motion: scan stylesheets for @keyframes / animation / transition
-    // declarations and check for a corresponding @media (prefers-reduced-motion) guard.
-    // Cross-origin sheets silently skip (SecurityError on cssRules access).
-    const reducedMotion = (() => {
-      let hasAnimation = false
-      let hasReducedMotionQuery = false
-      let keyframeCount = 0
-      try {
-        const sheets = Array.from(doc.styleSheets)
-        for (const sheet of sheets) {
-          let rules
-          try { rules = Array.from(sheet.cssRules || []) } catch { continue }
-          for (const rule of rules) {
-            if (rule instanceof CSSKeyframesRule) {
-              keyframeCount++
-              hasAnimation = true
-            } else if (rule instanceof CSSMediaRule) {
-              const media = rule.conditionText || (rule.media && rule.media.mediaText) || ''
-              if (/prefers-reduced-motion/i.test(media)) {
-                hasReducedMotionQuery = true
-              }
-              try {
-                Array.from(rule.cssRules || []).forEach(inner => {
-                  if (!inner.style) return
-                  const a = inner.style.getPropertyValue('animation') || inner.style.getPropertyValue('animation-name') || ''
-                  const t = inner.style.getPropertyValue('transition') || ''
-                  if ((a && a !== 'none') || (t && t !== 'none')) hasAnimation = true
-                })
-              } catch { }
-            } else if (rule.style) {
-              const a = rule.style.getPropertyValue('animation') || rule.style.getPropertyValue('animation-name') || ''
-              const t = rule.style.getPropertyValue('transition') || ''
-              if ((a && a !== 'none') || (t && t !== 'none')) hasAnimation = true
-            }
-          }
-        }
-      } catch { }
-      const status = !hasAnimation ? 'pass' : hasReducedMotionQuery ? 'pass' : 'warn'
-      return { hasAnimation, hasReducedMotionQuery, keyframeCount, status }
-    })()
-
-    // ARIA misuse: three heuristic checks that complement axe's ARIA rules.
-    const ariaIssues = (() => {
-      const issues = []
-      const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-
-      // 1. aria-hidden="true" containing focusable children (WCAG SC 4.1.2 / 1.3.1)
-      Array.from(doc.querySelectorAll('[aria-hidden="true"]'))
-        .filter(el => el.querySelector(FOCUSABLE))
-        .slice(0, 10)
-        .forEach(el => {
-          const n = el.querySelectorAll(FOCUSABLE).length
-          issues.push({
-            type: 'aria-hidden-focusable',
-            severity: 'error',
-            tag: el.tagName.toLowerCase(),
-            role: el.getAttribute('role') || null,
-            label: el.getAttribute('aria-label') || null,
-            visibleText: (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80),
-            message: `aria-hidden="true" conceals ${n} focusable child${n !== 1 ? 'ren' : ''} from assistive technology`,
-          })
-        })
-
-      // 2. Role conflicts with native element semantics
-      const ROLE_CONFLICTS = [
-        { sel: 'button[role]', nativeRole: 'button', badRoles: ['link', 'menuitem', 'option', 'none', 'presentation'] },
-        { sel: 'a[href][role]', nativeRole: 'link', badRoles: ['presentation', 'none'] },
-        { sel: 'h1[role],h2[role],h3[role],h4[role],h5[role],h6[role]', nativeRole: 'heading', badRoles: ['presentation', 'none'] },
-        { sel: 'input[type="checkbox"][role]', nativeRole: 'checkbox', badRoles: ['button', 'link'] },
-        { sel: 'input[type="radio"][role]', nativeRole: 'radio', badRoles: ['button', 'link'] },
-      ]
-      ROLE_CONFLICTS.forEach(({ sel, nativeRole, badRoles }) => {
-        Array.from(doc.querySelectorAll(sel)).slice(0, 20).forEach(el => {
-          const role = (el.getAttribute('role') || '').trim().toLowerCase()
-          if (!badRoles.includes(role)) return
-          issues.push({
-            type: 'conflicting-role',
-            severity: 'warning',
-            tag: el.tagName.toLowerCase(),
-            role,
-            label: el.getAttribute('aria-label') || null,
-            visibleText: (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80),
-            message: `Native role "${nativeRole}" overridden by role="${role}" — may confuse assistive technology`,
-          })
-        })
-      })
-
-      // 3. aria-label identical to visible text (redundant, advisory only)
-      Array.from(doc.querySelectorAll('[aria-label]')).slice(0, 50).forEach(el => {
-        const ariaLabel = (el.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ')
-        const visibleText = (el.textContent || '').trim().replace(/\s+/g, ' ')
-        if (!ariaLabel || !visibleText) return
-        if (ariaLabel.toLowerCase() === visibleText.toLowerCase()) {
-          issues.push({
-            type: 'redundant-label',
-            severity: 'advisory',
-            tag: el.tagName.toLowerCase(),
-            role: el.getAttribute('role') || null,
-            label: ariaLabel.slice(0, 80),
-            visibleText: visibleText.slice(0, 80),
-            message: 'aria-label matches visible text exactly — redundant but not harmful',
-          })
-        }
-      })
-
-      return issues
-    })()
-
-    const landmarks = {
-      main: doc.querySelectorAll('main, [role="main"]').length,
-      nav: doc.querySelectorAll('nav, [role="navigation"]').length,
-      header: doc.querySelectorAll('header, [role="banner"]').length,
-      footer: doc.querySelectorAll('footer, [role="contentinfo"]').length,
-    }
-
-    // Best-effort page heading: try semantic/ARIA headings first, then Ionic's ion-title.
-    // Each querySelector is safe on non-Ionic pages — returns null if absent.
-    let pageHeading = null
-    for (const sel of ['h1', 'ion-title', '[role="heading"][aria-level="1"]', 'h2']) {
-      const el = doc.querySelector(sel)
-      if (el) {
-        const text = (el.textContent || '').trim().replace(/\s+/g, ' ')
-        if (text) { pageHeading = text; break }
-      }
-    }
+    const counts = perDoc.reduce((acc, r) => {
+      Object.keys(r.counts).forEach(k => { acc[k] = (acc[k] || 0) + r.counts[k] })
+      return acc
+    }, {})
+    const missingAlt = perDoc.flatMap(r => r.missingAlt)
+    const missingLabel = perDoc.flatMap(r => r.missingLabel)
+    const negativeFocus = perDoc.flatMap(r => r.negativeFocus)
+    const positiveFocus = perDoc.flatMap(r => r.positiveFocus)
+    const headingIssues = perDoc.flatMap(r => r.headingIssues)
+    const smallTargets = perDoc.flatMap(r => r.smallTargets)
+    const typographyIssues = perDoc.flatMap(r => r.typographyIssues)
+    const ariaIssues = perDoc.flatMap(r => r.ariaIssues)
+    const landmarks = perDoc.reduce((acc, r) => {
+      Object.keys(r.landmarks).forEach(k => { acc[k] = (acc[k] || 0) + r.landmarks[k] })
+      return acc
+    }, { main: 0, nav: 0, header: 0, footer: 0 })
+    const reducedMotion = perDoc.reduce((acc, r) => ({
+      hasAnimation: acc.hasAnimation || r.reducedMotion.hasAnimation,
+      hasReducedMotionQuery: acc.hasReducedMotionQuery || r.reducedMotion.hasReducedMotionQuery,
+      keyframeCount: acc.keyframeCount + r.reducedMotion.keyframeCount,
+    }), { hasAnimation: false, hasReducedMotionQuery: false, keyframeCount: 0 })
+    reducedMotion.status = !reducedMotion.hasAnimation ? 'pass' : reducedMotion.hasReducedMotionQuery ? 'pass' : 'warn'
+    // Prefer the top document's own heading; fall back to a report iframe's if the
+    // shell page itself has none (true for most of this app's report-wrapper routes).
+    const pageHeading = perDoc.map(r => r.pageHeading).find(Boolean) || null
 
     const summary = {
-      url: doc.location.href,
-      title: doc.title,
+      url: topDoc.location.href,
+      title: topDoc.title,
       pageHeading,
       mode: INTERACTIVE ? 'interactive' : 'automated',
       scanLabel,
